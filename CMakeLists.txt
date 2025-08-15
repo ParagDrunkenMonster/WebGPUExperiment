@@ -50,10 +50,20 @@ endif()
 
 # At the end of the CMakeLists.txt
 if (EMSCRIPTEN)
+    # Remove deprecated -sUSE_WEBGPU from all targets
+    foreach(t ${CMAKE_PROJECT_NAME} App webgpu glfw3webgpu)
+        get_target_property(existing_opts ${t} LINK_OPTIONS)
+        if (existing_opts)
+            list(FILTER existing_opts EXCLUDE REGEX "-sUSE_WEBGPU")
+            set_target_properties(${t} PROPERTIES LINK_OPTIONS "${existing_opts}")
+        endif()
+    endforeach()
+
 	# Add Emscripten-specific link options
 	target_link_options(App PRIVATE
 		-sUSE_GLFW=3 # Use Emscripten-provided GLFW
-		-sUSE_WEBGPU # Handle WebGPU symbols
+		#-sUSE_WEBGPU # Handle WebGPU symbols
+        --use-port=emdawnwebgpu  # New WebGPU port (replaces -sUSE_WEBGPU)
 		-sASYNCIFY # Required by WebGPU-C++
 		-sALLOW_MEMORY_GROWTH
 		#--preload-file "${CMAKE_CURRENT_SOURCE_DIR}/resources"

@@ -226,6 +226,13 @@ void Application::Terminate()
 
     if (m_Queue)
     {
+#ifdef __EMSCRIPTEN__
+        auto onQueueWorkDone = [](WGPUQueueWorkDoneStatus status, void* userdata) {
+            std::cout << "Queued work finished with status: " << status << ", User Data : " << userdata << std::endl;
+        };
+
+        wgpuQueueOnSubmittedWorkDone(m_Queue, onQueueWorkDone, nullptr);
+#else
         auto onQueueWorkDone = [](WGPUQueueWorkDoneStatus status, void* userdata1, void* userdata2) {
             std::cout << "Queued work finished with status: " << status << std::endl;
         };
@@ -238,6 +245,7 @@ void Application::Terminate()
         callbackInfo2.userdata2 = nullptr;
 
         wgpuQueueOnSubmittedWorkDone2(m_Queue, callbackInfo2);
+#endif
 
         wgpuQueueRelease(m_Queue);
         m_Queue = nullptr;
@@ -453,15 +461,20 @@ bool Application::GetAdapter()
     // Getting the limits
     // ----------------------------------------------------------------------------------------
     // as of April 1st, 2024, wgpuAdapterGetLimits is not implemented yet on Google Chrome, hence the #ifndef
-#ifndef __EMSCRIPTEN__
+
     WGPUSupportedLimits supportedLimits = {};
     supportedLimits.nextInChain = nullptr;
 
+#ifndef __EMSCRIPTEN__
 #ifdef WEBGPU_BACKEND_DAWN
     const bool get_limit_success = wgpuAdapterGetLimits(m_Adapter, &supportedLimits) == WGPUStatus_Success;
 #else
     const bool get_limit_success = wgpuAdapterGetLimits(m_Adapter, &supportedLimits);
 #endif
+#else
+    wgpuAdapterGetLimits(m_Adapter, &supportedLimits);
+    const bool get_limit_success = true;
+#endif 
 
     if (get_limit_success)
     {
@@ -471,8 +484,6 @@ bool Application::GetAdapter()
         std::cout << " - maxTextureDimension3D: " << supportedLimits.limits.maxTextureDimension3D << std::endl;
         std::cout << " - maxTextureArrayLayers: " << supportedLimits.limits.maxTextureArrayLayers << std::endl;
     }
-#endif // NOT __EMSCRIPTEN__
-    // ----------------------------------------------------------------------------------------
 
     return get_limit_success;
 }
@@ -548,16 +559,20 @@ bool Application::GetDevice()
     //typedef void (*WGPUDeviceLostCallback)(WGPUDeviceLostReason reason, char const * message, void * userdata) WGPU_FUNCTION_ATTRIBUTE;
     //typedef void (*WGPUDeviceLostCallbackNew)(WGPUDevice const* device, WGPUDeviceLostReason reason, char const* message, void* userdata) WGPU_FUNCTION_ATTRIBUTE;
 
-    deviceDesc.deviceLostCallbackInfo.callback = [](WGPUDevice const* device, WGPUDeviceLostReason reason, char const* message, void* userdata) {
+#ifdef __EMSCRIPTEN__
+    deviceDesc.deviceLostCallback = [](WGPUDeviceLostReason reason, char const* message, void*) {
         std::cout << "Device lost: reason " << reason;
         if (message) std::cout << " (" << message << ")";
         std::cout << std::endl;
     };
-    /*deviceDesc.deviceLostCallback = [](WGPUDeviceLostReason reason, char const* message, void*) {
-        std::cout << "Device lost: reason " << reason;
+#else
+    deviceDesc.deviceLostCallbackInfo.callback = [](WGPUDevice const* device, WGPUDeviceLostReason reason, char const* message, void* userdata) {
+        std::cout << "Device lost: reason " << reason << ", UserData : " << userdata << std::endl;
         if (message) std::cout << " (" << message << ")";
         std::cout << std::endl;
-    };*/
+    };
+    
+#endif
 
     m_Device = requestDeviceSync(m_Adapter, &deviceDesc);
 

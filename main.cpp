@@ -1,5 +1,9 @@
 #include "Application.h"
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
+
 int main() 
 {
     Application app;
