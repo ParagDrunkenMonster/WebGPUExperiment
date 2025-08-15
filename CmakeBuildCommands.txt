@@ -1,0 +1,5 @@
+building cmake
+cmake . -B build
+
+compile
+cmake --build build
