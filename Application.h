@@ -1,12 +1,17 @@
 #ifndef __Application_h__
 #define __Application_h__
 
+#ifdef __EMSCRIPTEN__
+// Emscripten / Dawn WebGPU
+#include "C:\emscripten\emsdk\upstream\emscripten\cache\ports\emdawnwebgpu\emdawnwebgpu_pkg\webgpu\include\webgpu\webgpu.h"
+#else
 // Includes
 #ifdef WEBGPU_BACKEND_WGPU
 #include <webgpu/wgpu.h>
 #endif // WEBGPU_BACKEND_WGPU
 
 #include <webgpu/webgpu.h>
+#endif
 
 #include <utility>
 

@@ -17,7 +17,11 @@
 
 namespace
 {
+#ifdef __EMSCRIPTEN__
+    WGPUAdapter requestAdapterSync(WGPUInstance instance, WGPURequestAdapterOptions const*)// options) 
+#else
     WGPUAdapter requestAdapterSync(WGPUInstance instance, WGPURequestAdapterOptions const* options) 
+#endif
     {
         // A simple structure holding the local information shared with the
         // onAdapterRequestEnded callback.
@@ -28,58 +32,75 @@ namespace
         };
         UserData userData;
 
-        // Callback called by wgpuInstanceRequestAdapter when the request returns
-        // This is a C++ lambda function, but could be any function defined in the
-        // global scope. It must be non-capturing (the brackets [] are empty) so
-        // that it behaves like a regular C function pointer, which is what
-        // wgpuInstanceRequestAdapter expects (WebGPU being a C API). The workaround
-        // is to convey what we want to capture through the pUserData pointer,
-        // provided as the last argument of wgpuInstanceRequestAdapter and received
-        // by the callback as its last argument.
-        auto onAdapterRequestEnded = [](WGPURequestAdapterStatus status, WGPUAdapter adapter, char const* message, void* pUserData) 
+        std::cout << "Requesting adapter started ..." << std::endl;
+       
+#ifdef __EMSCRIPTEN__
+
+        auto onDeviceRequestEnded = [](WGPURequestAdapterStatus status, WGPUAdapter adapter, WGPUStringView message, WGPU_NULLABLE void* userdata1, WGPU_NULLABLE void*)
         {
-            UserData& userData = *reinterpret_cast<UserData*>(pUserData);
-            if (status == WGPURequestAdapterStatus_Success) 
+            std::cout << "Adopter request ended callback... " << (message.length > 0 ? message.data : "") << std::endl;
+            UserData& userData = *reinterpret_cast<UserData*>(userdata1);
+            if (status == WGPURequestAdapterStatus_Success)
             {
                 userData.adapter = adapter;
             }
-            else 
+            userData.requestEnded = true;
+        };
+
+        WGPURequestAdapterCallbackInfo callbackInfo;
+        callbackInfo.nextInChain = nullptr;
+        callbackInfo.mode = WGPUCallbackMode_WaitAnyOnly;
+        callbackInfo.callback = onDeviceRequestEnded;
+        callbackInfo.userdata1 = &userData;
+        callbackInfo.userdata2 = nullptr;
+
+
+        WGPUFuture future = wgpuInstanceRequestAdapter(instance, nullptr, callbackInfo);
+        std::cout << "Requesting adapter ended..." << std::endl;
+
+        WGPUFutureWaitInfo waitInfo{};
+        waitInfo.future = future;
+        waitInfo.completed = false;
+
+        while (wgpuInstanceWaitAny(instance, 1, &waitInfo, 0) != WGPUWaitStatus::WGPUWaitStatus_Success)
+        {
+            std::cout << "Waiting for adapter..." << std::endl;
+            emscripten_sleep(100); // Or just return control to browser
+        }
+#else
+        auto onAdapterRequestEnded = [](WGPURequestAdapterStatus status, WGPUAdapter adapter, char const* message, void* pUserData)
+        {
+            std::cout << "Adopter request ended callback... " << (message ? message : "") << std::endl;
+            UserData& userData = *reinterpret_cast<UserData*>(pUserData);
+            if (status == WGPURequestAdapterStatus_Success)
             {
-                std::cout << "Could not get WebGPU adapter: " << message << std::endl;
+                userData.adapter = adapter;
             }
             userData.requestEnded = true;
         };
 
         // Call to the WebGPU request adapter procedure
-        wgpuInstanceRequestAdapter(instance, options, onAdapterRequestEnded, (void*)&userData );
+        wgpuInstanceRequestAdapter(instance, options, onAdapterRequestEnded, (void*)&userData);
+        std::cout << "Requesting adapter ended..." << std::endl;
 
-        // We wait until userData.requestEnded gets true
-        //{{Wait for request to end}}
-#ifdef __EMSCRIPTEN__
-        while (!userData.requestEnded) 
-        {
-            emscripten_sleep(100);
-        }
-#else
         while (!userData.requestEnded) 
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
 #endif // __EMSCRIPTEN__
 
-        assert(userData.requestEnded);
+        
+
 
         return userData.adapter;
     }
 
-    /**
-     * Utility function to get a WebGPU device, so that
-     *     WGPUDevice device = requestDeviceSync(adapter, options);
-     * is roughly equivalent to
-     *     const device = await adapter.requestDevice(descriptor);
-     * It is very similar to requestAdapter
-     */
-    WGPUDevice requestDeviceSync(WGPUAdapter adapter, WGPUDeviceDescriptor const* descriptor) 
+    
+#ifdef __EMSCRIPTEN__
+    WGPUDevice requestDeviceSync(WGPUInstance instance, WGPUAdapter adapter, WGPUDeviceDescriptor const* descriptor)
+#else
+    WGPUDevice requestDeviceSync(WGPUInstance, WGPUAdapter adapter, WGPUDeviceDescriptor const* descriptor)
+#endif
     {
         struct UserData
         {
@@ -89,28 +110,57 @@ namespace
 
         UserData userData;
 
-        auto onDeviceRequestEnded = [](WGPURequestDeviceStatus status, WGPUDevice device, char const* message, void* pUserData) 
+        
+
+#ifdef __EMSCRIPTEN__
+       
+        auto onDeviceRequestEnded = [](WGPURequestDeviceStatus status, WGPUDevice device, WGPUStringView message, WGPU_NULLABLE void* userdata1, WGPU_NULLABLE void*)
         {
-            UserData& userData = *reinterpret_cast<UserData*>(pUserData);
-            if (status == WGPURequestDeviceStatus_Success) 
+            std::cout << "Device request ended callback... " << (message.length > 0 ? message.data : "") << std::endl;
+
+            UserData& userData = *reinterpret_cast<UserData*>(userdata1);
+            if (status == WGPURequestDeviceStatus_Success)
             {
                 userData.device = device;
             }
-            else 
+
+            userData.requestEnded = true;
+        };
+
+        WGPURequestDeviceCallbackInfo callbackInfo;
+        callbackInfo.nextInChain = nullptr;
+        callbackInfo.mode = WGPUCallbackMode_WaitAnyOnly;
+        callbackInfo.callback = onDeviceRequestEnded;
+        callbackInfo.userdata1 = &userData;
+        callbackInfo.userdata2 = nullptr;
+
+        WGPUFuture future = wgpuAdapterRequestDevice(adapter, descriptor, callbackInfo);
+
+        WGPUFutureWaitInfo waitInfo{};
+        waitInfo.future = future;
+        waitInfo.completed = false;
+
+        while (wgpuInstanceWaitAny(instance, 1, &waitInfo, 0) != WGPUWaitStatus::WGPUWaitStatus_Success)
+        {
+            std::cout << "Waiting for device..." << std::endl;
+            emscripten_sleep(100); // Or just return control to browser
+        }
+#else
+        auto onDeviceRequestEnded = [](WGPURequestDeviceStatus status, WGPUDevice device, char const* message, void* pUserData)
+        {
+            std::cout << "Device request ended callback... " << (message ? message : "") << std::endl;
+
+            UserData& userData = *reinterpret_cast<UserData*>(pUserData);
+            if (status == WGPURequestDeviceStatus_Success)
             {
-                std::cout << "Could not get WebGPU device: " << message << std::endl;
+                userData.device = device;
             }
+
             userData.requestEnded = true;
         };
 
         wgpuAdapterRequestDevice(adapter, descriptor, onDeviceRequestEnded, (void*)&userData);
 
-#ifdef __EMSCRIPTEN__
-        while (!userData.requestEnded) 
-        {
-            emscripten_sleep(100);
-        }
-#else
         while (!userData.requestEnded) 
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -125,6 +175,7 @@ namespace
     // We also add an inspect device function:
     void inspectDevice(WGPUDevice device) 
     {
+#ifndef __EMSCRIPTEN__
         std::vector<WGPUFeatureName> features;
         size_t featureCount = wgpuDeviceEnumerateFeatures(device, nullptr);
         features.resize(featureCount);
@@ -137,17 +188,39 @@ namespace
             std::cout << " - 0x" << f << std::endl;
         }
         std::cout << std::dec;
+#endif
 
+        
+
+#ifdef __EMSCRIPTEN__
+        WGPULimits limits;
+        limits.nextInChain = nullptr;
+
+        limits.minStorageBufferOffsetAlignment = 256;
+        limits.minUniformBufferOffsetAlignment = 256;
+
+        const bool success = wgpuDeviceGetLimits(device, &limits) == WGPUStatus_Success;
+
+        if (success)
+        {
+            std::cout << "Device limits:" << std::endl;
+            std::cout << " - maxTextureDimension1D: " << limits.maxTextureDimension1D << std::endl;
+            std::cout << " - maxTextureDimension2D: " << limits.maxTextureDimension2D << std::endl;
+            std::cout << " - maxTextureDimension3D: " << limits.maxTextureDimension3D << std::endl;
+            std::cout << " - maxTextureArrayLayers: " << limits.maxTextureArrayLayers << std::endl;
+            // { { Extra device limits } }
+        }
+#else
         WGPUSupportedLimits limits = {};
         limits.nextInChain = nullptr;
 
 #ifdef WEBGPU_BACKEND_DAWN
-        bool success = wgpuDeviceGetLimits(device, &limits) == WGPUStatus_Success;
+        const bool success = wgpuDeviceGetLimits(device, &limits) == WGPUStatus_Success;
 #else
-        bool success = wgpuDeviceGetLimits(device, &limits);
+        const bool success = wgpuDeviceGetLimits(device, &limits);
 #endif
 
-        if (success) 
+        if (success)
         {
             std::cout << "Device limits:" << std::endl;
             std::cout << " - maxTextureDimension1D: " << limits.limits.maxTextureDimension1D << std::endl;
@@ -156,6 +229,9 @@ namespace
             std::cout << " - maxTextureArrayLayers: " << limits.limits.maxTextureArrayLayers << std::endl;
             // { { Extra device limits } }
         }
+#endif
+
+        
     }
 }
 
@@ -197,22 +273,40 @@ bool Application::Initialize()
     }
 
     if (!GetInstance())
+    {
+        std::cerr << "Getting instance failed" << std::endl;
         return false;
+    }
 
     if (!GetAdapter())
+    {
+        std::cerr << "Getting adapter failed" << std::endl;
         return false;
+    }
 
     if (!GetFeaturesAndProperties())
+    {
+        std::cerr << "Getting features and properties failed" << std::endl;
         return false;
+    }
 
     if (!GetDevice())
+    {
+        std::cerr << "Getting device failed" << std::endl;
         return false;
+    }
 
     if (!GetSurface())
+    {
+        std::cerr << "Getting surface failed" << std::endl;
         return false;
+    }
 
     if (!GetQueue())
+    {
+        std::cerr << "Getting queue failed" << std::endl;
         return false;
+    }
 
     m_IsFullyInitialized = true;
     
@@ -227,13 +321,31 @@ void Application::Terminate()
     if (m_Queue)
     {
 #ifdef __EMSCRIPTEN__
-        auto onQueueWorkDone = [](WGPUQueueWorkDoneStatus status, void* userdata) {
-            std::cout << "Queued work finished with status: " << status << ", User Data : " << userdata << std::endl;
+        auto onQueueWorkDone = [](WGPUQueueWorkDoneStatus status, WGPUStringView , void* , void* ) { //message, void* userdata1, void* userdata2) {
+            std::cout << "Queued work finished with status: " << status << std::endl;
         };
 
-        wgpuQueueOnSubmittedWorkDone(m_Queue, onQueueWorkDone, nullptr);
+        WGPUQueueWorkDoneCallbackInfo callbackInfo2;
+        callbackInfo2.nextInChain = nullptr;
+        callbackInfo2.mode = WGPUCallbackMode_WaitAnyOnly;
+        callbackInfo2.callback = onQueueWorkDone;
+        callbackInfo2.userdata1 = nullptr;
+        callbackInfo2.userdata2 = nullptr;
+
+        WGPUFuture future = wgpuQueueOnSubmittedWorkDone(m_Queue, callbackInfo2);
+
+        WGPUFutureWaitInfo waitInfo{};
+        waitInfo.future = future;
+        waitInfo.completed = false;
+
+        while (wgpuInstanceWaitAny(m_Instance, 1, &waitInfo, 0) != WGPUWaitStatus::WGPUWaitStatus_Success)
+        {
+            std::cout << "Waiting for que to be done..." << std::endl;
+            emscripten_sleep(100); // Or just return control to browser
+        }
+
 #else
-        auto onQueueWorkDone = [](WGPUQueueWorkDoneStatus status, void* userdata1, void* userdata2) {
+        auto onQueueWorkDone = [](WGPUQueueWorkDoneStatus status, void*, void*) {
             std::cout << "Queued work finished with status: " << status << std::endl;
         };
 
@@ -319,7 +431,11 @@ void Application::MainLoop()
 
     WGPUCommandEncoderDescriptor encoderDesc = {};
     encoderDesc.nextInChain = nullptr;
+#ifdef __EMSCRIPTEN__
+    //encoderDesc.label = "My command encoder";
+#else
     encoderDesc.label = "My command encoder";
+#endif
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(m_Device, &encoderDesc);
 
     // [...] Describe Render Pass
@@ -361,14 +477,22 @@ std::pair<WGPUSurfaceTexture, WGPUTextureView> Application::GetNextSurfaceViewDa
     WGPUSurfaceTexture surfaceTexture;
     wgpuSurfaceGetCurrentTexture(m_Surface, &surfaceTexture);
 
-    if (surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_Success) 
+#ifdef __EMSCRIPTEN__
+    if (surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal)
+#else
+    if (surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_Success)
+#endif
     {
         return { surfaceTexture, nullptr };
     }
 
     WGPUTextureViewDescriptor viewDescriptor;
     viewDescriptor.nextInChain = nullptr;
+#ifdef __EMSCRIPTEN__
+    //viewDescriptor.label = "Surface texture view";
+#else
     viewDescriptor.label = "Surface texture view";
+#endif
     viewDescriptor.format = wgpuTextureGetFormat(surfaceTexture.texture);
     viewDescriptor.dimension = WGPUTextureViewDimension_2D;
     viewDescriptor.baseMipLevel = 0;
@@ -422,11 +546,30 @@ bool Application::GetInstance()
 
 bool Application::GetSurface()
 {
+    std::cout << "Getting surface Started from window " << (m_Window ? (void*)m_Window : "nullptr") << std::endl;
+#ifdef __EMSCRIPTEN__
+
+    WGPUStringView selector{};
+    selector.data = "#canvas";// ID of your HTML canvas
+    selector.length = strlen(selector.data);
+
+    WGPUEmscriptenSurfaceSourceCanvasHTMLSelector canvasDesc{};
+    canvasDesc.chain.sType = WGPUSType_EmscriptenSurfaceSourceCanvasHTMLSelector;
+    canvasDesc.selector = selector; 
+
+    WGPUSurfaceDescriptor surfaceDesc{};
+    surfaceDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&canvasDesc);
+
+    m_Surface = wgpuInstanceCreateSurface(m_Instance, &surfaceDesc);
+#else
     m_Surface = glfwGetWGPUSurface(m_Instance, m_Window);
+#endif
+    std::cout << "Getting surface Started " << std::endl;
     if (m_Surface == nullptr)
         return false;
 
     WGPUSurfaceCapabilities capabilityes;
+    capabilityes.nextInChain = nullptr;
     wgpuSurfaceGetCapabilities(m_Surface, m_Adapter, &capabilityes);
        
     
@@ -450,8 +593,6 @@ bool Application::GetSurface()
 
 bool Application::GetAdapter()
 {
-    std::cout << "Requesting adapter..." << std::endl;
-
     WGPURequestAdapterOptions adapterOpts = {};
     adapterOpts.nextInChain = nullptr;
     m_Adapter = requestAdapterSync(m_Instance, &adapterOpts);
@@ -462,19 +603,15 @@ bool Application::GetAdapter()
     // ----------------------------------------------------------------------------------------
     // as of April 1st, 2024, wgpuAdapterGetLimits is not implemented yet on Google Chrome, hence the #ifndef
 
+#ifndef __EMSCRIPTEN__
     WGPUSupportedLimits supportedLimits = {};
     supportedLimits.nextInChain = nullptr;
 
-#ifndef __EMSCRIPTEN__
 #ifdef WEBGPU_BACKEND_DAWN
     const bool get_limit_success = wgpuAdapterGetLimits(m_Adapter, &supportedLimits) == WGPUStatus_Success;
 #else
     const bool get_limit_success = wgpuAdapterGetLimits(m_Adapter, &supportedLimits);
 #endif
-#else
-    wgpuAdapterGetLimits(m_Adapter, &supportedLimits);
-    const bool get_limit_success = true;
-#endif 
 
     if (get_limit_success)
     {
@@ -484,12 +621,30 @@ bool Application::GetAdapter()
         std::cout << " - maxTextureDimension3D: " << supportedLimits.limits.maxTextureDimension3D << std::endl;
         std::cout << " - maxTextureArrayLayers: " << supportedLimits.limits.maxTextureArrayLayers << std::endl;
     }
-
     return get_limit_success;
+#else
+    WGPULimits supportedLimits = {};
+    supportedLimits.nextInChain = nullptr;
+
+    supportedLimits.minStorageBufferOffsetAlignment = 256;
+    supportedLimits.minUniformBufferOffsetAlignment = 256;
+
+    wgpuAdapterGetLimits(m_Adapter, &supportedLimits);
+
+    std::cout << "Adapter limits:" << std::endl;
+    std::cout << " - maxTextureDimension1D: " << supportedLimits.maxTextureDimension1D << std::endl;
+    std::cout << " - maxTextureDimension2D: " << supportedLimits.maxTextureDimension2D << std::endl;
+    std::cout << " - maxTextureDimension3D: " << supportedLimits.maxTextureDimension3D << std::endl;
+    std::cout << " - maxTextureArrayLayers: " << supportedLimits.maxTextureArrayLayers << std::endl;
+
+    return true;
+
+#endif 
 }
 
 bool Application::GetFeaturesAndProperties()
 {
+#ifndef __EMSCRIPTEN__
     // Getting the features
     // ----------------------------------------------------------------------------------------
     std::vector<WGPUFeatureName> features;
@@ -537,6 +692,7 @@ bool Application::GetFeaturesAndProperties()
     std::cout << " - adapterType: 0x" << properties.adapterType << std::endl;
     std::cout << " - backendType: 0x" << properties.backendType << std::endl;
     std::cout << std::dec; // Restore decimal numbers
+#endif
 
     return true;
 }
@@ -550,31 +706,64 @@ bool Application::GetDevice()
 
     WGPUDeviceDescriptor deviceDesc = {};
     deviceDesc.nextInChain = nullptr;
+#ifdef __EMSCRIPTEN__
+    //deviceDesc.label = "My Device"; // anything works here, that's your call
+
+    auto callback = [](WGPUDevice const*, WGPUErrorType type, WGPUStringView message, void*, void*) {
+        std::cout << "Uncaptured device error: type " << type;
+        std::cout << " (" << (message.length > 0 ? message.data : "") << ")";
+        std::cout << std::endl;
+    };
+
+    WGPUUncapturedErrorCallbackInfo uncapturedErrorCallbackInfo{};
+    uncapturedErrorCallbackInfo.nextInChain = nullptr;
+    uncapturedErrorCallbackInfo.callback = callback;
+    uncapturedErrorCallbackInfo.userdata1 = nullptr;
+    uncapturedErrorCallbackInfo.userdata2 = nullptr;
+
+    deviceDesc.uncapturedErrorCallbackInfo = uncapturedErrorCallbackInfo;
+
+#else
     deviceDesc.label = "My Device"; // anything works here, that's your call
+#endif
     deviceDesc.requiredFeatureCount = 0; // we do not require any specific feature
     deviceDesc.requiredLimits = nullptr; // we do not require any specific limit
     deviceDesc.defaultQueue.nextInChain = nullptr;
-    deviceDesc.defaultQueue.label = "The default queue";
-    // Null for now, see below
-    //typedef void (*WGPUDeviceLostCallback)(WGPUDeviceLostReason reason, char const * message, void * userdata) WGPU_FUNCTION_ATTRIBUTE;
-    //typedef void (*WGPUDeviceLostCallbackNew)(WGPUDevice const* device, WGPUDeviceLostReason reason, char const* message, void* userdata) WGPU_FUNCTION_ATTRIBUTE;
-
 #ifdef __EMSCRIPTEN__
-    deviceDesc.deviceLostCallback = [](WGPUDeviceLostReason reason, char const* message, void*) {
-        std::cout << "Device lost: reason " << reason;
-        if (message) std::cout << " (" << message << ")";
+    //WGPUStringView label;
+    //label.
+    //deviceDesc.defaultQueue.label = "The default queue";
+#else
+    deviceDesc.defaultQueue.label = "The default queue";
+#endif
+  
+#ifdef __EMSCRIPTEN__
+
+    auto deviceLostCallback = [](WGPUDevice const*, WGPUDeviceLostReason reason, WGPUStringView message, void* userdata1, void*) {
+        std::cout << "Device lost: reason " << reason << ", UserData : " << (userdata1 ? userdata1 : "nullptr") << std::endl;
+        std::cout << " (" << (message.length > 0 ? message.data : "") << ")";
         std::cout << std::endl;
     };
+
+    WGPUDeviceLostCallbackInfo deviceLostCallbackInfo{};
+    deviceLostCallbackInfo.nextInChain = nullptr;
+    deviceLostCallbackInfo.mode = WGPUCallbackMode_WaitAnyOnly;
+    deviceLostCallbackInfo.callback = deviceLostCallback;
+    deviceLostCallbackInfo.userdata1 = nullptr;
+    deviceLostCallbackInfo.userdata2 = nullptr;
+
+    deviceDesc.deviceLostCallbackInfo = deviceLostCallbackInfo;
+
 #else
-    deviceDesc.deviceLostCallbackInfo.callback = [](WGPUDevice const* device, WGPUDeviceLostReason reason, char const* message, void* userdata) {
+    deviceDesc.deviceLostCallbackInfo.callback = [](WGPUDevice const*, WGPUDeviceLostReason reason, char const* message, void* userdata) {
         std::cout << "Device lost: reason " << reason << ", UserData : " << userdata << std::endl;
-        if (message) std::cout << " (" << message << ")";
+        std::cout << " (" << (message ? message : "") << ")";
         std::cout << std::endl;
     };
     
 #endif
 
-    m_Device = requestDeviceSync(m_Adapter, &deviceDesc);
+    m_Device = requestDeviceSync(m_Instance, m_Adapter, &deviceDesc);
 
     if (m_Device == nullptr)
         return false;
@@ -583,14 +772,16 @@ bool Application::GetDevice()
 
     inspectDevice(m_Device);
 
+#ifndef __EMSCRIPTEN__
+
     auto onDeviceError = [](WGPUErrorType type, char const* message, void* /* pUserData */) {
         std::cout << "Uncaptured device error: type " << type;
-        if (message) std::cout << " (" << message << ")";
+        std::cout << " (" << (message ? message : "") << ")";
         std::cout << std::endl;
     };
 
     wgpuDeviceSetUncapturedErrorCallback(m_Device, onDeviceError, nullptr /* pUserData */);
-
+#endif
     return true;
 }
 
