@@ -1,5 +1,13 @@
 /build
-/build-web
 /glfw3webgpu
 /glfw
 /webgpu
+/build-web/glfw3webgpu
+/build-web/CMakeFiles
+/build-web/.ninja_deps
+/build-web/.ninja_log
+/build-web/App.html
+/build-web/CMakeCache.txt
+/build-web/build.ninja
+/build-web/cmake_install.cmake
+/build-web/webgpu/cmake_install.cmake
