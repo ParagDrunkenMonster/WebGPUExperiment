@@ -3,6 +3,8 @@
 
 #ifdef __EMSCRIPTEN__
 // Emscripten / Dawn WebGPU
+// NOTE, Parag, the default webgpu.h that gets included with emscripten is not compatible with the lib file it provides somehow
+// This particular header file is compatible 
 #include "C:\emscripten\emsdk\upstream\emscripten\cache\ports\emdawnwebgpu\emdawnwebgpu_pkg\webgpu\include\webgpu\webgpu.h"
 #else
 // Includes
@@ -48,6 +50,8 @@ private:
     bool GetFeaturesAndProperties();
     bool GetDevice();
     bool GetQueue();
+    bool LoadShaders();
+    bool CreatePipeline();
     std::pair<WGPUSurfaceTexture, WGPUTextureView> GetNextSurfaceViewData();
 
     bool m_IsFullyInitialized;
@@ -63,6 +67,12 @@ private:
     WGPUDevice m_Device;
 
     WGPUQueue m_Queue;
+
+    WGPURenderPipeline m_Pipeline;
+
+    WGPUTextureFormat m_SurfaceFormat = WGPUTextureFormat_Undefined;
+
+    WGPUShaderModule m_ShaderModule;
 };
 
 
