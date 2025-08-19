@@ -17,16 +17,8 @@
 
 const char* shaderSource = R"(
     @vertex
-    fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> @builtin(position) vec4f {
-        var p = vec2f(0.0, 0.0);
-        if (in_vertex_index == 0u) {
-            p = vec2f(-0.5, -0.5);
-        } else if (in_vertex_index == 1u) {
-            p = vec2f(0.5, -0.5);
-        } else {
-            p = vec2f(0.0, 0.5);
-        }
-        return vec4f(p, 0.0, 1.0);
+    fn vs_main(@location(0) in_vertex_position: vec2f) -> @builtin(position) vec4f {
+        return vec4f(in_vertex_position, 0.0, 1.0);
     }
 
     @fragment
@@ -34,6 +26,25 @@ const char* shaderSource = R"(
         return vec4f(0.0, 0.4, 1.0, 1.0);
     }
 )";
+
+const std::vector<float> vertexData = {
+    // x0, y0
+    -0.5, -0.5,
+
+    // x1, y1
+    +0.5, -0.5,
+
+    // x2, y2
+    +0.0, +0.5,
+
+    // Add a second triangle:
+    - 0.55f, -0.5,
+
+    -0.05f, +0.5,
+    -0.55f, +0.5
+};
+
+const uint32_t vertexCount = static_cast<uint32_t>(vertexData.size() / 2);
 
 namespace
 {
@@ -193,7 +204,11 @@ namespace
     }
 
     // We also add an inspect device function:
+#ifndef __EMSCRIPTEN__
     void inspectDevice(WGPUDevice device) 
+#else
+    void inspectDevice(WGPUDevice)
+#endif
     {
 #ifndef __EMSCRIPTEN__
         std::vector<WGPUFeatureName> features;
@@ -208,50 +223,7 @@ namespace
             std::cout << " - 0x" << f << std::endl;
         }
         std::cout << std::dec;
-#endif
-
-        
-
-#ifdef __EMSCRIPTEN__
-        WGPULimits limits;
-        limits.nextInChain = nullptr;
-
-        limits.minStorageBufferOffsetAlignment = 256;
-        limits.minUniformBufferOffsetAlignment = 256;
-
-        const bool success = wgpuDeviceGetLimits(device, &limits) == WGPUStatus_Success;
-
-        if (success)
-        {
-            std::cout << "Device limits:" << std::endl;
-            std::cout << " - maxTextureDimension1D: " << limits.maxTextureDimension1D << std::endl;
-            std::cout << " - maxTextureDimension2D: " << limits.maxTextureDimension2D << std::endl;
-            std::cout << " - maxTextureDimension3D: " << limits.maxTextureDimension3D << std::endl;
-            std::cout << " - maxTextureArrayLayers: " << limits.maxTextureArrayLayers << std::endl;
-            // { { Extra device limits } }
-        }
-#else
-        WGPUSupportedLimits limits = {};
-        limits.nextInChain = nullptr;
-
-#ifdef WEBGPU_BACKEND_DAWN
-        const bool success = wgpuDeviceGetLimits(device, &limits) == WGPUStatus_Success;
-#else
-        const bool success = wgpuDeviceGetLimits(device, &limits);
-#endif
-
-        if (success)
-        {
-            std::cout << "Device limits:" << std::endl;
-            std::cout << " - maxTextureDimension1D: " << limits.limits.maxTextureDimension1D << std::endl;
-            std::cout << " - maxTextureDimension2D: " << limits.limits.maxTextureDimension2D << std::endl;
-            std::cout << " - maxTextureDimension3D: " << limits.limits.maxTextureDimension3D << std::endl;
-            std::cout << " - maxTextureArrayLayers: " << limits.limits.maxTextureArrayLayers << std::endl;
-            // { { Extra device limits } }
-        }
-#endif
-
-        
+#endif        
     }
 }
 
@@ -264,6 +236,7 @@ Application::Application()
     , m_Queue(nullptr)
     , m_Pipeline(nullptr)
     , m_ShaderModule(nullptr)
+    , m_Buffer1(nullptr)
 {
 
 }
@@ -342,6 +315,24 @@ bool Application::Initialize()
         return false;
     }
 
+
+    // Experimentation for the "Playing with buffers" chapter
+    if (!CreateBuffer())
+    {
+        CreateBuffer();
+        std::cerr << "Creating buffer failed" << std::endl;
+        return false;
+    }
+
+    //{ { Write input data } }
+
+    //{ { Encode and submit the buffer to buffer copy } }
+
+    //{ { Read buffer data back } }
+
+    //{ { Release buffers } }
+
+
     m_IsFullyInitialized = true;
     
     return true;
@@ -350,6 +341,8 @@ bool Application::Initialize()
 void Application::Terminate()
 {
     m_IsFullyInitialized = false;
+
+    DestroyBuffer(m_Buffer1);
 
     if (m_ShaderModule)
     {
@@ -441,6 +434,16 @@ void Application::Terminate()
     glfwTerminate();
 }
 
+void Application::DestroyBuffer(WGPUBuffer& Buffer)
+{
+    if (Buffer)
+    {
+        wgpuBufferRelease(Buffer);
+        //wgpuBufferDestroy(Buffer); // To force destroy the buffer
+        Buffer = nullptr;
+    }
+}
+
 void Application::MainLoop()
 {
     // Get the next target texture view
@@ -489,9 +492,13 @@ void Application::MainLoop()
 
     // Select which render pipeline to use
     wgpuRenderPassEncoderSetPipeline(renderPass, m_Pipeline);
-    // Draw 1 instance of a 3-vertices shape
-    wgpuRenderPassEncoderDraw(renderPass, 3, 1, 0, 0);
 
+    // Set vertex buffer while encoding the render pass
+    wgpuRenderPassEncoderSetVertexBuffer(renderPass, 0, m_Buffer1, 0, vertexData.size() * sizeof(float));
+
+    // We use the `vertexCount` variable instead of hard-coding the vertex count
+    wgpuRenderPassEncoderDraw(renderPass, vertexCount, 1, 0, 0);
+ 
     // [...] Use Render Pass
     wgpuRenderPassEncoderEnd(renderPass);
     wgpuRenderPassEncoderRelease(renderPass);
@@ -652,16 +659,14 @@ bool Application::GetAdapter()
 
     std::cout << "Got adapter: " << m_Adapter << std::endl;
 
-    // Getting the limits
-    // ----------------------------------------------------------------------------------------
-    // as of April 1st, 2024, wgpuAdapterGetLimits is not implemented yet on Google Chrome, hence the #ifndef
-
+    // Start get adapter limits
+    // -------------------------------------------------------------------------------------------------
 #ifndef __EMSCRIPTEN__
     WGPUSupportedLimits supportedLimits = {};
     supportedLimits.nextInChain = nullptr;
 
 #ifdef WEBGPU_BACKEND_DAWN
-    const bool get_limit_success = wgpuAdapterGetLimits(m_Adapter, &supportedLimits) == WGPUStatus_Success;
+    const bool get_limit_success = wgpuAdapterGetLimits(m_Adapter, &supportedLimits) & WGPUStatus_Success;
 #else
     const bool get_limit_success = wgpuAdapterGetLimits(m_Adapter, &supportedLimits);
 #endif
@@ -673,6 +678,10 @@ bool Application::GetAdapter()
         std::cout << " - maxTextureDimension2D: " << supportedLimits.limits.maxTextureDimension2D << std::endl;
         std::cout << " - maxTextureDimension3D: " << supportedLimits.limits.maxTextureDimension3D << std::endl;
         std::cout << " - maxTextureArrayLayers: " << supportedLimits.limits.maxTextureArrayLayers << std::endl;
+
+        std::cout << "adapter.maxVertexAttributes: " << supportedLimits.limits.maxVertexAttributes << std::endl;
+
+        m_AdopterLimits = supportedLimits.limits;
     }
     return get_limit_success;
 #else
@@ -690,9 +699,15 @@ bool Application::GetAdapter()
     std::cout << " - maxTextureDimension3D: " << supportedLimits.maxTextureDimension3D << std::endl;
     std::cout << " - maxTextureArrayLayers: " << supportedLimits.maxTextureArrayLayers << std::endl;
 
+    std::cout << "adapter.maxVertexAttributes: " << supportedLimits.maxVertexAttributes << std::endl;
+
+    m_AdopterLimits = supportedLimits;
+
     return true;
 
 #endif 
+    // End get adapter limits
+    // -------------------------------------------------------------------------------------------------
 }
 
 bool Application::GetFeaturesAndProperties()
@@ -750,6 +765,14 @@ bool Application::GetFeaturesAndProperties()
     return true;
 }
 
+void setDefaultLimits(WGPULimits& limits) 
+{
+    limits.maxTextureDimension1D = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxTextureDimension2D = WGPU_LIMIT_U32_UNDEFINED;
+    limits.maxTextureDimension3D = WGPU_LIMIT_U32_UNDEFINED;
+    // [...] Set everything to WGPU_LIMIT_U32_UNDEFINED or WGPU_LIMIT_U64_UNDEFINED to mean no limit
+}
+
 bool Application::GetDevice()
 {
     // Creating device
@@ -759,8 +782,29 @@ bool Application::GetDevice()
 
     WGPUDeviceDescriptor deviceDesc = {};
     deviceDesc.nextInChain = nullptr;
+
+   
+
 #ifdef __EMSCRIPTEN__
     //deviceDesc.label = "My Device"; // anything works here, that's your call
+    //deviceDesc.defaultQueue.label = "The default queue";
+
+    WGPULimits requiredLimits{};
+    setDefaultLimits(requiredLimits);
+
+    requiredLimits = m_AdopterLimits;
+
+    /*// We use at most 1 vertex attribute for now
+    requiredLimits.maxVertexAttributes = 1;
+    // We should also tell that we use 1 vertex buffers
+    requiredLimits.maxVertexBuffers = 1;
+    // Maximum size of a buffer is 6 vertices of 2 float each
+    requiredLimits.maxBufferSize = 6 * 2 * sizeof(float);
+    // Maximum stride between 2 consecutive vertices in the vertex buffer
+    requiredLimits.maxVertexBufferArrayStride = 2 * sizeof(float);
+    */
+
+    deviceDesc.requiredLimits = &requiredLimits; // we do not require any specific limit
 
     auto callback = [](WGPUDevice const*, WGPUErrorType type, WGPUStringView message, void*, void*) {
         std::cout << "Uncaptured device error: type " << type;
@@ -776,21 +820,9 @@ bool Application::GetDevice()
 
     deviceDesc.uncapturedErrorCallbackInfo = uncapturedErrorCallbackInfo;
 
-#else
-    deviceDesc.label = "My Device"; // anything works here, that's your call
-#endif
-    deviceDesc.requiredFeatureCount = 0; // we do not require any specific feature
-    deviceDesc.requiredLimits = nullptr; // we do not require any specific limit
-    deviceDesc.defaultQueue.nextInChain = nullptr;
-#ifdef __EMSCRIPTEN__
     //WGPUStringView label;
     //label.
     //deviceDesc.defaultQueue.label = "The default queue";
-#else
-    deviceDesc.defaultQueue.label = "The default queue";
-#endif
-  
-#ifdef __EMSCRIPTEN__
 
     auto deviceLostCallback = [](WGPUDevice const*, WGPUDeviceLostReason reason, WGPUStringView message, void* userdata1, void*) {
         std::cout << "Device lost: reason " << reason << ", UserData : " << (userdata1 ? userdata1 : "nullptr") << std::endl;
@@ -808,13 +840,34 @@ bool Application::GetDevice()
     deviceDesc.deviceLostCallbackInfo = deviceLostCallbackInfo;
 
 #else
+    deviceDesc.label = "My Device"; // anything works here, that's your call
+    deviceDesc.defaultQueue.label = "The default queue";
+
+    WGPURequiredLimits requiredLimits{};
+    setDefaultLimits(requiredLimits.limits);
+
+    requiredLimits.limits = m_AdopterLimits;
+
+    // We use at most 1 vertex attribute for now
+    requiredLimits.limits.maxVertexAttributes = 1;
+    // We should also tell that we use 1 vertex buffers
+    requiredLimits.limits.maxVertexBuffers = 1;
+    // Maximum size of a buffer is 6 vertices of 2 float each
+    requiredLimits.limits.maxBufferSize = 6 * 2 * sizeof(float);
+    // Maximum stride between 2 consecutive vertices in the vertex buffer
+    requiredLimits.limits.maxVertexBufferArrayStride = 2 * sizeof(float);
+
+    deviceDesc.requiredLimits = &requiredLimits; // we do not require any specific limit
+
     deviceDesc.deviceLostCallbackInfo.callback = [](WGPUDevice const*, WGPUDeviceLostReason reason, char const* message, void* userdata) {
         std::cout << "Device lost: reason " << reason << ", UserData : " << userdata << std::endl;
         std::cout << " (" << (message ? message : "") << ")";
         std::cout << std::endl;
     };
-    
 #endif
+
+    deviceDesc.requiredFeatureCount = 0; // we do not require any specific feature
+    deviceDesc.defaultQueue.nextInChain = nullptr;
 
     m_Device = requestDeviceSync(m_Instance, m_Adapter, &deviceDesc);
 
@@ -824,6 +877,58 @@ bool Application::GetDevice()
     std::cout << "Got device: " << m_Device << std::endl;
 
     inspectDevice(m_Device);
+
+    // Start get device limits
+    // -------------------------------------------------------------------------------------------------
+#ifdef __EMSCRIPTEN__
+    WGPULimits limits;
+    limits.nextInChain = nullptr;
+
+    limits.minStorageBufferOffsetAlignment = 256;
+    limits.minUniformBufferOffsetAlignment = 256;
+
+    const bool success = wgpuDeviceGetLimits(m_Device, &limits) & WGPUStatus_Success;
+
+    if (success)
+    {
+        std::cout << "Device limits:" << std::endl;
+        std::cout << " - maxTextureDimension1D: " << limits.maxTextureDimension1D << std::endl;
+        std::cout << " - maxTextureDimension2D: " << limits.maxTextureDimension2D << std::endl;
+        std::cout << " - maxTextureDimension3D: " << limits.maxTextureDimension3D << std::endl;
+        std::cout << " - maxTextureArrayLayers: " << limits.maxTextureArrayLayers << std::endl;
+
+        std::cout << "device.maxVertexAttributes: " << limits.maxVertexAttributes << std::endl;
+        // { { Extra device limits } }
+
+        m_DeviceLimits = limits;
+    }
+#else
+    WGPUSupportedLimits limits = {};
+    limits.nextInChain = nullptr;
+
+#ifdef WEBGPU_BACKEND_DAWN
+    const bool success = wgpuDeviceGetLimits(m_Device, &limits) & WGPUStatus_Success;
+#else
+    const bool success = wgpuDeviceGetLimits(device, &limits);
+#endif
+
+    if (success)
+    {
+        std::cout << "Device limits:" << std::endl;
+        std::cout << " - maxTextureDimension1D: " << limits.limits.maxTextureDimension1D << std::endl;
+        std::cout << " - maxTextureDimension2D: " << limits.limits.maxTextureDimension2D << std::endl;
+        std::cout << " - maxTextureDimension3D: " << limits.limits.maxTextureDimension3D << std::endl;
+        std::cout << " - maxTextureArrayLayers: " << limits.limits.maxTextureArrayLayers << std::endl;
+
+        std::cout << "device.maxVertexAttributes: " << limits.limits.maxVertexAttributes << std::endl;
+
+        // { { Extra device limits } }
+
+        m_DeviceLimits = limits.limits;
+    }
+#endif
+    // End get device limits
+    // -------------------------------------------------------------------------------------------------
 
 #ifndef __EMSCRIPTEN__
 
@@ -921,6 +1026,17 @@ bool Application::LoadShaders()
 
 bool Application::CreatePipeline()
 {
+    // Vertex fetch
+    WGPUVertexAttribute positionAttrib;
+    positionAttrib.format = WGPUVertexFormat::WGPUVertexFormat_Float32x2;;
+    positionAttrib.offset = 0;
+    positionAttrib.shaderLocation = 0;
+
+    m_VertexBufferLayout.arrayStride = 2 * sizeof(float);
+    m_VertexBufferLayout.stepMode = WGPUVertexStepMode::WGPUVertexStepMode_Vertex;
+    m_VertexBufferLayout.attributeCount = 1;
+    m_VertexBufferLayout.attributes = &positionAttrib;
+
     WGPUMultisampleState multisample{};
     multisample.nextInChain = nullptr;
     multisample.count = 1;
@@ -948,8 +1064,8 @@ bool Application::CreatePipeline()
 #endif
     vertex.constantCount = 0;
     vertex.constants = nullptr;
-    vertex.bufferCount = 0;
-    vertex.buffers = nullptr;
+    vertex.bufferCount = 1;
+    vertex.buffers = &m_VertexBufferLayout;
 
 
     WGPUBlendComponent blendColor{};
@@ -1010,4 +1126,95 @@ bool Application::CreatePipeline()
     m_Pipeline = wgpuDeviceCreateRenderPipeline(m_Device, &pipelineDesc);
 
     return m_Pipeline != nullptr;
+}
+
+bool Application::CreateBuffer()
+{
+    /*WGPUBufferDescriptor bufferDesc = {};
+    bufferDesc.nextInChain = nullptr;
+    bufferDesc.label = "Staging buffer";
+    bufferDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapWrite;
+    bufferDesc.size = 16;
+    bufferDesc.mappedAtCreation = false;
+    m_Buffer1 = wgpuDeviceCreateBuffer(m_Device, &bufferDesc);
+
+    if (m_Buffer1 == nullptr)
+        return false;
+
+    bufferDesc.label = "Output buffer";
+    bufferDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_Vertex;
+    m_Buffer2 = wgpuDeviceCreateBuffer(m_Device, &bufferDesc);
+
+    if (m_Buffer2 == nullptr)
+        return false;
+
+    std::vector<uint8_t> numbers(16);
+    for (uint8_t i = 0; i < 16; ++i) 
+        numbers[i] = i;
+
+    wgpuQueueWriteBuffer(m_Queue, m_Buffer1, 0, numbers.data(), numbers.size());
+
+    // Now record the copy once
+    WGPUCommandEncoderDescriptor encDesc = {};
+    encDesc.label = "Init Encoder";
+    WGPUCommandEncoder initEncoder = wgpuDeviceCreateCommandEncoder(m_Device, &encDesc);
+
+    wgpuCommandEncoderCopyBufferToBuffer(initEncoder, m_Buffer1, 0, m_Buffer2, 0, 16);
+
+    WGPUCommandBuffer copyCmd = wgpuCommandEncoderFinish(initEncoder, nullptr);
+    wgpuQueueSubmit(m_Queue, 1, &copyCmd);
+
+    wgpuCommandBufferRelease(copyCmd);
+    wgpuCommandEncoderRelease(initEncoder);
+    wgpuBufferRelease(m_Buffer1); // staging no longer needed
+    m_Buffer1 = nullptr;*/
+
+    WGPUBufferDescriptor vertexBufferDesc{};
+    vertexBufferDesc.nextInChain = nullptr;
+    vertexBufferDesc.size = vertexData.size() * sizeof(float);
+    vertexBufferDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_Vertex; // GPU-only
+    vertexBufferDesc.mappedAtCreation = false;
+
+    m_Buffer1 = wgpuDeviceCreateBuffer(m_Device, &vertexBufferDesc);
+
+    WGPUBufferDescriptor stagingDesc{};
+    stagingDesc.nextInChain = nullptr;
+    stagingDesc.size = vertexData.size() * sizeof(float);
+    stagingDesc.usage = WGPUBufferUsage_MapWrite | WGPUBufferUsage_CopySrc; // CPU-writable + copy source
+    stagingDesc.mappedAtCreation = true;
+
+    WGPUBuffer stagingBuffer = wgpuDeviceCreateBuffer(m_Device, &stagingDesc);
+
+    void* mapped = wgpuBufferGetMappedRange(stagingBuffer, 0, stagingDesc.size);
+    memcpy(mapped, vertexData.data(), stagingDesc.size);
+    wgpuBufferUnmap(stagingBuffer);
+
+    WGPUCommandEncoderDescriptor encoderDesc{};
+    encoderDesc.nextInChain = nullptr;
+#ifdef __EMSCRIPTEN__
+    WGPUStringView encoderDescLabel{};
+    encoderDescLabel.data = "Upload Encoder";
+    encoderDescLabel.length = strlen(encoderDescLabel.data);
+    encoderDesc.label = encoderDescLabel;
+#else
+    encoderDesc.label = "Upload Encoder";
+#endif
+
+    WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(m_Device, &encoderDesc);
+
+    wgpuCommandEncoderCopyBufferToBuffer(encoder, stagingBuffer, 0, m_Buffer1, 0, stagingDesc.size);
+
+    WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(encoder, nullptr);
+    wgpuQueueSubmit(m_Queue, 1, &cmd);
+
+    //Staging buffer is not required anymore
+    wgpuBufferRelease(stagingBuffer);
+    wgpuCommandEncoderRelease(encoder);
+    wgpuCommandBufferRelease(cmd);
+
+
+    // Upload geometry data to the buffer
+    //wgpuQueueWriteBuffer(m_Queue, m_Buffer1, 0, vertexData.data(), bufferDesc.size);
+
+    return true;
 }

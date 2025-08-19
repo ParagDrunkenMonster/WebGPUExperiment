@@ -983,6 +983,75 @@ async function createWasm() {
   var ___assert_fail = (condition, filename, line, func) =>
       abort(`Assertion failed: ${UTF8ToString(condition)}, at: ` + [filename ? UTF8ToString(filename) : 'unknown filename', line, func ? UTF8ToString(func) : 'unknown function']);
 
+  class ExceptionInfo {
+      // excPtr - Thrown object pointer to wrap. Metadata pointer is calculated from it.
+      constructor(excPtr) {
+        this.excPtr = excPtr;
+        this.ptr = excPtr - 24;
+      }
+  
+      set_type(type) {
+        HEAPU32[(((this.ptr)+(4))>>2)] = type;
+      }
+  
+      get_type() {
+        return HEAPU32[(((this.ptr)+(4))>>2)];
+      }
+  
+      set_destructor(destructor) {
+        HEAPU32[(((this.ptr)+(8))>>2)] = destructor;
+      }
+  
+      get_destructor() {
+        return HEAPU32[(((this.ptr)+(8))>>2)];
+      }
+  
+      set_caught(caught) {
+        caught = caught ? 1 : 0;
+        HEAP8[(this.ptr)+(12)] = caught;
+      }
+  
+      get_caught() {
+        return HEAP8[(this.ptr)+(12)] != 0;
+      }
+  
+      set_rethrown(rethrown) {
+        rethrown = rethrown ? 1 : 0;
+        HEAP8[(this.ptr)+(13)] = rethrown;
+      }
+  
+      get_rethrown() {
+        return HEAP8[(this.ptr)+(13)] != 0;
+      }
+  
+      // Initialize native structure fields. Should be called once after allocated.
+      init(type, destructor) {
+        this.set_adjusted_ptr(0);
+        this.set_type(type);
+        this.set_destructor(destructor);
+      }
+  
+      set_adjusted_ptr(adjustedPtr) {
+        HEAPU32[(((this.ptr)+(16))>>2)] = adjustedPtr;
+      }
+  
+      get_adjusted_ptr() {
+        return HEAPU32[(((this.ptr)+(16))>>2)];
+      }
+    }
+  
+  var exceptionLast = 0;
+  
+  var uncaughtExceptionCount = 0;
+  var ___cxa_throw = (ptr, type, destructor) => {
+      var info = new ExceptionInfo(ptr);
+      // Initialize ExceptionInfo content after it was allocated in __cxa_allocate_exception.
+      info.init(type, destructor);
+      exceptionLast = ptr;
+      uncaughtExceptionCount++;
+      assert(false, 'Exception thrown, but exception catching is not enabled. Compile with -sNO_DISABLE_EXCEPTION_CATCHING or -sEXCEPTION_CATCHING_ALLOWED=[..] to catch.');
+    };
+
   var __abort_js = () =>
       abort('native code called abort()');
 
@@ -2337,8 +2406,83 @@ async function createWasm() {
     ;
   }
 
+  
+  
+  
+  var _emwgpuBufferGetMappedRange = (bufferPtr, offset, size) => {
+      var buffer = WebGPU.getJsObject(bufferPtr);
+  
+      if (size === 0) warnOnce('getMappedRange size=0 no longer means WGPU_WHOLE_MAP_SIZE');
+  
+      if (size == -1) size = undefined;
+  
+      var mapped;
+      try {
+        mapped = buffer.getMappedRange(offset, size);
+      } catch (ex) {
+        err(`buffer.getMappedRange(${offset}, ${size}) failed: ${ex}`);
+        return 0;
+      }
+  
+      var data = _memalign(16, mapped.byteLength);
+      HEAPU8.fill(0, data, mapped.byteLength);
+      WebGPU.Internals.bufferOnUnmaps[bufferPtr].push(() => {
+        new Uint8Array(mapped).set(HEAPU8.subarray(data, data + mapped.byteLength));
+        _free(data);
+      });
+      return data;
+    };
+
+  var _emwgpuBufferUnmap = (bufferPtr) => {
+      var buffer = WebGPU.getJsObject(bufferPtr);
+  
+      var onUnmap = WebGPU.Internals.bufferOnUnmaps[bufferPtr];
+      if (!onUnmap) {
+        // Already unmapped
+        return;
+      }
+  
+      for (var i = 0; i < onUnmap.length; ++i) {
+        onUnmap[i]();
+      }
+      delete WebGPU.Internals.bufferOnUnmaps[bufferPtr]
+  
+      buffer.unmap();
+    };
+
   var _emwgpuDelete = (ptr) => {
       delete WebGPU.Internals.jsObjects[ptr];
+    };
+
+  var _emwgpuDeviceCreateBuffer = (devicePtr, descriptor, bufferPtr) => {
+      assert(descriptor);assert(HEAPU32[((descriptor)>>2)] === 0);
+  
+      var mappedAtCreation = !!(HEAPU32[(((descriptor)+(32))>>2)]);
+  
+      var desc = {
+        "label": WebGPU.makeStringFromOptionalStringView(
+          descriptor + 4),
+        "usage": HEAPU32[(((descriptor)+(16))>>2)],
+        "size": (HEAPU32[((((descriptor + 4))+(24))>>2)] * 0x100000000 + HEAPU32[(((descriptor)+(24))>>2)]),
+        "mappedAtCreation": mappedAtCreation,
+      };
+  
+      var device = WebGPU.getJsObject(devicePtr);
+      var buffer;
+      try {
+        buffer = device.createBuffer(desc);
+      } catch (ex) {
+        // The only exception should be RangeError if mapping at creation ran out of memory.
+        assert(ex instanceof RangeError);
+        assert(mappedAtCreation);
+        err('createBuffer threw:', ex);
+        return false;
+      }
+      WebGPU.Internals.jsObjectInsert(bufferPtr, buffer);
+      if (mappedAtCreation) {
+        WebGPU.Internals.bufferOnUnmaps[bufferPtr] = [];
+      }
+      return true;
     };
 
   var _emwgpuDeviceCreateShaderModule = (devicePtr, descriptor, shaderModulePtr) => {
@@ -7335,6 +7479,20 @@ async function createWasm() {
     };
 
   
+  function _wgpuCommandEncoderCopyBufferToBuffer(encoderPtr, srcPtr, srcOffset, dstPtr, dstOffset, size) {
+    srcOffset = bigintToI53Checked(srcOffset);
+    dstOffset = bigintToI53Checked(dstOffset);
+    size = bigintToI53Checked(size);
+  
+  
+      var commandEncoder = WebGPU.getJsObject(encoderPtr);
+      var src = WebGPU.getJsObject(srcPtr);
+      var dst = WebGPU.getJsObject(dstPtr);
+      commandEncoder.copyBufferToBuffer(src, srcOffset, dst, dstOffset, size);
+    ;
+  }
+
+  
   var _wgpuCommandEncoderFinish = (encoderPtr, descriptor) => {
       // TODO: Use the descriptor.
       var commandEncoder = WebGPU.getJsObject(encoderPtr);
@@ -7445,6 +7603,20 @@ async function createWasm() {
       var pipeline = WebGPU.getJsObject(pipelinePtr);
       pass.setPipeline(pipeline);
     };
+
+  
+  function _wgpuRenderPassEncoderSetVertexBuffer(passPtr, slot, bufferPtr, offset, size) {
+    offset = bigintToI53Checked(offset);
+    size = bigintToI53Checked(size);
+  
+  
+      assert(slot >= 0);
+      var pass = WebGPU.getJsObject(passPtr);
+      var buffer = WebGPU.getJsObject(bufferPtr);
+      if (size == -1) size = undefined;
+      pass.setVertexBuffer(slot, buffer, offset, size);
+    ;
+  }
 
   var _wgpuSurfaceConfigure = (surfacePtr, config) => {
       assert(config);
@@ -7985,7 +8157,6 @@ if (Module['wasmBinary']) wasmBinary = Module['wasmBinary'];
   'makePromise',
   'idsToPromises',
   'makePromiseCallback',
-  'ExceptionInfo',
   'findMatchingCatch',
   'Browser_asyncPrepareDataCounter',
   'isLeapYear',
@@ -8116,6 +8287,7 @@ missingLibrarySymbols.forEach(missingLibrarySymbol)
   'uncaughtExceptionCount',
   'exceptionLast',
   'exceptionCaught',
+  'ExceptionInfo',
   'Browser',
   'requestFullscreen',
   'requestFullScreen',
@@ -8452,6 +8624,8 @@ var wasmImports = {
   /** @export */
   __assert_fail: ___assert_fail,
   /** @export */
+  __cxa_throw: ___cxa_throw,
+  /** @export */
   _abort_js: __abort_js,
   /** @export */
   _tzset_js: __tzset_js,
@@ -8466,7 +8640,13 @@ var wasmImports = {
   /** @export */
   emwgpuAdapterRequestDevice: _emwgpuAdapterRequestDevice,
   /** @export */
+  emwgpuBufferGetMappedRange: _emwgpuBufferGetMappedRange,
+  /** @export */
+  emwgpuBufferUnmap: _emwgpuBufferUnmap,
+  /** @export */
   emwgpuDelete: _emwgpuDelete,
+  /** @export */
+  emwgpuDeviceCreateBuffer: _emwgpuDeviceCreateBuffer,
   /** @export */
   emwgpuDeviceCreateShaderModule: _emwgpuDeviceCreateShaderModule,
   /** @export */
@@ -8508,6 +8688,8 @@ var wasmImports = {
   /** @export */
   wgpuCommandEncoderBeginRenderPass: _wgpuCommandEncoderBeginRenderPass,
   /** @export */
+  wgpuCommandEncoderCopyBufferToBuffer: _wgpuCommandEncoderCopyBufferToBuffer,
+  /** @export */
   wgpuCommandEncoderFinish: _wgpuCommandEncoderFinish,
   /** @export */
   wgpuDeviceCreateCommandEncoder: _wgpuDeviceCreateCommandEncoder,
@@ -8525,6 +8707,8 @@ var wasmImports = {
   wgpuRenderPassEncoderEnd: _wgpuRenderPassEncoderEnd,
   /** @export */
   wgpuRenderPassEncoderSetPipeline: _wgpuRenderPassEncoderSetPipeline,
+  /** @export */
+  wgpuRenderPassEncoderSetVertexBuffer: _wgpuRenderPassEncoderSetVertexBuffer,
   /** @export */
   wgpuSurfaceConfigure: _wgpuSurfaceConfigure,
   /** @export */

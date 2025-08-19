@@ -52,9 +52,15 @@ private:
     bool GetQueue();
     bool LoadShaders();
     bool CreatePipeline();
+    bool CreateBuffer();
+    void DestroyBuffer(WGPUBuffer& Buffer);
+
     std::pair<WGPUSurfaceTexture, WGPUTextureView> GetNextSurfaceViewData();
 
     bool m_IsFullyInitialized;
+
+    WGPULimits m_AdopterLimits;
+    WGPULimits m_DeviceLimits;
 
     struct GLFWwindow* m_Window;
 
@@ -73,6 +79,10 @@ private:
     WGPUTextureFormat m_SurfaceFormat = WGPUTextureFormat_Undefined;
 
     WGPUShaderModule m_ShaderModule;
+
+    WGPUVertexBufferLayout m_VertexBufferLayout;
+
+    WGPUBuffer m_Buffer1;
 };
 
 
