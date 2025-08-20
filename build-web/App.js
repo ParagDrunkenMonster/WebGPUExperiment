@@ -7584,19 +7584,32 @@ async function createWasm() {
       queue.submit(cmds);
     };
 
-  var _wgpuRenderPassEncoderDraw = (passPtr, vertexCount, instanceCount, firstVertex, firstInstance) => {
-      assert(vertexCount >= 0);
+  var _wgpuRenderPassEncoderDrawIndexed = (passPtr, indexCount, instanceCount, firstIndex, baseVertex, firstInstance) => {
+      assert(indexCount >= 0);
       assert(instanceCount >= 0);
-      firstVertex >>>= 0;
+      firstIndex >>>= 0;
       firstInstance >>>= 0;
       var pass = WebGPU.getJsObject(passPtr);
-      pass.draw(vertexCount, instanceCount, firstVertex, firstInstance);
+      pass.drawIndexed(indexCount, instanceCount, firstIndex, baseVertex, firstInstance);
     };
 
   var _wgpuRenderPassEncoderEnd = (encoderPtr) => {
       var encoder = WebGPU.getJsObject(encoderPtr);
       encoder.end();
     };
+
+  
+  function _wgpuRenderPassEncoderSetIndexBuffer(passPtr, bufferPtr, format, offset, size) {
+    offset = bigintToI53Checked(offset);
+    size = bigintToI53Checked(size);
+  
+  
+      var pass = WebGPU.getJsObject(passPtr);
+      var buffer = WebGPU.getJsObject(bufferPtr);
+      if (size == -1) size = undefined;
+      pass.setIndexBuffer(buffer, WebGPU.IndexFormat[format], offset, size);
+    ;
+  }
 
   var _wgpuRenderPassEncoderSetPipeline = (passPtr, pipelinePtr) => {
       var pass = WebGPU.getJsObject(passPtr);
@@ -8702,9 +8715,11 @@ var wasmImports = {
   /** @export */
   wgpuQueueSubmit: _wgpuQueueSubmit,
   /** @export */
-  wgpuRenderPassEncoderDraw: _wgpuRenderPassEncoderDraw,
+  wgpuRenderPassEncoderDrawIndexed: _wgpuRenderPassEncoderDrawIndexed,
   /** @export */
   wgpuRenderPassEncoderEnd: _wgpuRenderPassEncoderEnd,
+  /** @export */
+  wgpuRenderPassEncoderSetIndexBuffer: _wgpuRenderPassEncoderSetIndexBuffer,
   /** @export */
   wgpuRenderPassEncoderSetPipeline: _wgpuRenderPassEncoderSetPipeline,
   /** @export */

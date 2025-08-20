@@ -45,18 +45,18 @@ const char* shaderSource = R"(
     }
 )";
 
-const std::vector<float> vertexData = {
-    // x0,  y0,  r0,  g0,  b0
-    -0.5, -0.5, 1.0, 0.0, 0.0,
 
-    // x1,  y1,  r1,  g1,  b1
-    +0.5, -0.5, 0.0, 1.0, 0.0,
+std::vector<float> vertexData = {
+    // x,   y,     r,   g,   b
+    -0.5, -0.5,   1.0, 0.0, 0.0,
+    +0.5, -0.5,   0.0, 1.0, 0.0,
+    +0.5, +0.5,   0.0, 0.0, 1.0,
+    -0.5, +0.5,   1.0, 1.0, 0.0
+};
 
-    // ...
-    +0.0,   +0.5, 0.0, 0.0, 1.0,
-    -0.55f, -0.5, 1.0, 1.0, 0.0,
-    -0.05f, +0.5, 1.0, 0.0, 1.0,
-    -0.55f, +0.5, 0.0, 1.0, 1.0
+std::vector<uint16_t> indexData = {
+    0, 1, 2, // Triangle #0 connects points #0, #1 and #2
+    0, 2, 3  // Triangle #1 connects points #0, #2 and #3
 };
 
 const uint32_t vertexCount = static_cast<uint32_t>(vertexData.size() / 5);
@@ -251,7 +251,10 @@ Application::Application()
     , m_Queue(nullptr)
     , m_Pipeline(nullptr)
     , m_ShaderModule(nullptr)
+    , m_VertexBufferSize(0)
     , m_Buffer1(nullptr)
+    , m_IndexBufferSize(0)
+    , m_IndexBuffer(nullptr)
 {
 
 }
@@ -330,12 +333,15 @@ bool Application::Initialize()
         return false;
     }
 
-
-    // Experimentation for the "Playing with buffers" chapter
-    if (!CreateBuffer())
+    if (!CreateVertexBuffer())
     {
-        CreateBuffer();
-        std::cerr << "Creating buffer failed" << std::endl;
+        std::cerr << "Creating vertex buffer failed" << std::endl;
+        return false;
+    }
+
+    if (!CreateIndexBuffer())
+    {
+        std::cerr << "Creating index buffer failed" << std::endl;
         return false;
     }
 
@@ -358,6 +364,7 @@ void Application::Terminate()
     m_IsFullyInitialized = false;
 
     DestroyBuffer(m_Buffer1);
+    DestroyBuffer(m_IndexBuffer);
 
     if (m_ShaderModule)
     {
@@ -509,10 +516,15 @@ void Application::MainLoop()
     wgpuRenderPassEncoderSetPipeline(renderPass, m_Pipeline);
 
     // Set vertex buffer while encoding the render pass
-    wgpuRenderPassEncoderSetVertexBuffer(renderPass, 0, m_Buffer1, 0, vertexData.size() * sizeof(float));
+    wgpuRenderPassEncoderSetVertexBuffer(renderPass, 0, m_Buffer1, 0, m_VertexBufferSize);
+
+    wgpuRenderPassEncoderSetIndexBuffer(renderPass, m_IndexBuffer, WGPUIndexFormat_Uint16, 0, m_IndexBufferSize);
+
 
     // We use the `vertexCount` variable instead of hard-coding the vertex count
-    wgpuRenderPassEncoderDraw(renderPass, vertexCount, 1, 0, 0);
+   // wgpuRenderPassEncoderDraw(renderPass, vertexCount, 1, 0, 0);
+    const uint32_t IndicesCount = (uint32_t)indexData.size();
+    wgpuRenderPassEncoderDrawIndexed(renderPass, IndicesCount, 1, 0, 0, 0);
  
     // [...] Use Render Pass
     wgpuRenderPassEncoderEnd(renderPass);
@@ -1150,50 +1162,14 @@ bool Application::CreatePipeline()
     return m_Pipeline != nullptr;
 }
 
-bool Application::CreateBuffer()
+bool Application::CreateVertexBuffer()
 {
-    /*WGPUBufferDescriptor bufferDesc = {};
-    bufferDesc.nextInChain = nullptr;
-    bufferDesc.label = "Staging buffer";
-    bufferDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapWrite;
-    bufferDesc.size = 16;
-    bufferDesc.mappedAtCreation = false;
-    m_Buffer1 = wgpuDeviceCreateBuffer(m_Device, &bufferDesc);
-
-    if (m_Buffer1 == nullptr)
-        return false;
-
-    bufferDesc.label = "Output buffer";
-    bufferDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_Vertex;
-    m_Buffer2 = wgpuDeviceCreateBuffer(m_Device, &bufferDesc);
-
-    if (m_Buffer2 == nullptr)
-        return false;
-
-    std::vector<uint8_t> numbers(16);
-    for (uint8_t i = 0; i < 16; ++i) 
-        numbers[i] = i;
-
-    wgpuQueueWriteBuffer(m_Queue, m_Buffer1, 0, numbers.data(), numbers.size());
-
-    // Now record the copy once
-    WGPUCommandEncoderDescriptor encDesc = {};
-    encDesc.label = "Init Encoder";
-    WGPUCommandEncoder initEncoder = wgpuDeviceCreateCommandEncoder(m_Device, &encDesc);
-
-    wgpuCommandEncoderCopyBufferToBuffer(initEncoder, m_Buffer1, 0, m_Buffer2, 0, 16);
-
-    WGPUCommandBuffer copyCmd = wgpuCommandEncoderFinish(initEncoder, nullptr);
-    wgpuQueueSubmit(m_Queue, 1, &copyCmd);
-
-    wgpuCommandBufferRelease(copyCmd);
-    wgpuCommandEncoderRelease(initEncoder);
-    wgpuBufferRelease(m_Buffer1); // staging no longer needed
-    m_Buffer1 = nullptr;*/
+    m_VertexBufferSize = (uint32_t)vertexData.size() * sizeof(float);
+    //BufferSize = (BufferSize + 3) & ~3; //No need since buffer is already align by 4 bytes
 
     WGPUBufferDescriptor vertexBufferDesc{};
     vertexBufferDesc.nextInChain = nullptr;
-    vertexBufferDesc.size = vertexData.size() * sizeof(float);
+    vertexBufferDesc.size = m_VertexBufferSize;
     vertexBufferDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_Vertex; // GPU-only
     vertexBufferDesc.mappedAtCreation = false;
 
@@ -1201,7 +1177,7 @@ bool Application::CreateBuffer()
 
     WGPUBufferDescriptor stagingDesc{};
     stagingDesc.nextInChain = nullptr;
-    stagingDesc.size = vertexData.size() * sizeof(float);
+    stagingDesc.size = m_VertexBufferSize;
     stagingDesc.usage = WGPUBufferUsage_MapWrite | WGPUBufferUsage_CopySrc; // CPU-writable + copy source
     stagingDesc.mappedAtCreation = true;
 
@@ -1225,6 +1201,61 @@ bool Application::CreateBuffer()
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(m_Device, &encoderDesc);
 
     wgpuCommandEncoderCopyBufferToBuffer(encoder, stagingBuffer, 0, m_Buffer1, 0, stagingDesc.size);
+
+    WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(encoder, nullptr);
+    wgpuQueueSubmit(m_Queue, 1, &cmd);
+
+    //Staging buffer is not required anymore
+    wgpuBufferRelease(stagingBuffer);
+    wgpuCommandEncoderRelease(encoder);
+    wgpuCommandBufferRelease(cmd);
+
+
+    // Upload geometry data to the buffer
+    //wgpuQueueWriteBuffer(m_Queue, m_Buffer1, 0, vertexData.data(), bufferDesc.size);
+
+    return true;
+}
+
+bool Application::CreateIndexBuffer()
+{
+    m_IndexBufferSize = (uint32_t)indexData.size() * sizeof(uint16_t);
+    m_IndexBufferSize = (m_IndexBufferSize + 3) & ~3; //No need since buffer is already align by 4 bytes, since uint32_t is 4 bytes, if we use uint16_t or lower then we might have to uncomment this
+
+    WGPUBufferDescriptor vertexBufferDesc{};
+    vertexBufferDesc.nextInChain = nullptr;
+    vertexBufferDesc.size = m_IndexBufferSize;
+    vertexBufferDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_Index; // GPU-only
+    vertexBufferDesc.mappedAtCreation = false;
+
+    m_IndexBuffer = wgpuDeviceCreateBuffer(m_Device, &vertexBufferDesc);
+
+    WGPUBufferDescriptor stagingDesc{};
+    stagingDesc.nextInChain = nullptr;
+    stagingDesc.size = m_IndexBufferSize;
+    stagingDesc.usage = WGPUBufferUsage_MapWrite | WGPUBufferUsage_CopySrc; // CPU-writable + copy source
+    stagingDesc.mappedAtCreation = true;
+
+    WGPUBuffer stagingBuffer = wgpuDeviceCreateBuffer(m_Device, &stagingDesc);
+
+    void* mapped = wgpuBufferGetMappedRange(stagingBuffer, 0, stagingDesc.size);
+    memcpy(mapped, indexData.data(), stagingDesc.size);
+    wgpuBufferUnmap(stagingBuffer);
+
+    WGPUCommandEncoderDescriptor encoderDesc{};
+    encoderDesc.nextInChain = nullptr;
+#ifdef __EMSCRIPTEN__
+    WGPUStringView encoderDescLabel{};
+    encoderDescLabel.data = "Upload Encoder";
+    encoderDescLabel.length = strlen(encoderDescLabel.data);
+    encoderDesc.label = encoderDescLabel;
+#else
+    encoderDesc.label = "Upload Encoder";
+#endif
+
+    WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(m_Device, &encoderDesc);
+
+    wgpuCommandEncoderCopyBufferToBuffer(encoder, stagingBuffer, 0, m_IndexBuffer, 0, stagingDesc.size);
 
     WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(encoder, nullptr);
     wgpuQueueSubmit(m_Queue, 1, &cmd);

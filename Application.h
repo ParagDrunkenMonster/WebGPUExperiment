@@ -52,7 +52,8 @@ private:
     bool GetQueue();
     bool LoadShaders();
     bool CreatePipeline();
-    bool CreateBuffer();
+    bool CreateVertexBuffer();
+    bool CreateIndexBuffer();
     void DestroyBuffer(WGPUBuffer& Buffer);
 
     std::pair<WGPUSurfaceTexture, WGPUTextureView> GetNextSurfaceViewData();
@@ -82,7 +83,11 @@ private:
 
     WGPUVertexBufferLayout m_VertexBufferLayout;
 
+    uint32_t m_VertexBufferSize;
     WGPUBuffer m_Buffer1;
+
+    uint32_t m_IndexBufferSize;
+    WGPUBuffer m_IndexBuffer;
 };
 
 
