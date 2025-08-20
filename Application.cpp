@@ -16,35 +16,50 @@
 #include <glfw3webgpu.h>
 
 const char* shaderSource = R"(
+
+    struct VertexInput {
+        @location(0) position: vec2f,
+        @location(1) color: vec3f,
+    };
+
+    struct VertexOutput {
+        @builtin(position) position: vec4f,
+        // The location here does not refer to a vertex attribute, it just means
+        // that this field must be handled by the rasterizer.
+        // (It can also refer to another field of another struct that would be used
+        // as input to the fragment shader.)
+        @location(0) color: vec3f,
+    };
+
     @vertex
-    fn vs_main(@location(0) in_vertex_position: vec2f) -> @builtin(position) vec4f {
-        return vec4f(in_vertex_position, 0.0, 1.0);
+    fn vs_main(in: VertexInput) -> VertexOutput {
+        var out: VertexOutput; // create the output struct
+        out.position = vec4f(in.position, 0.0, 1.0); // same as what we used to directly return
+        out.color = in.color; // forward the color attribute to the fragment shader
+        return out;
     }
 
     @fragment
-    fn fs_main() -> @location(0) vec4f {
-        return vec4f(0.0, 0.4, 1.0, 1.0);
+    fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+        return vec4f(in.color, 1.0); // use the interpolated color coming from the vertex shader
     }
 )";
 
 const std::vector<float> vertexData = {
-    // x0, y0
-    -0.5, -0.5,
+    // x0,  y0,  r0,  g0,  b0
+    -0.5, -0.5, 1.0, 0.0, 0.0,
 
-    // x1, y1
-    +0.5, -0.5,
+    // x1,  y1,  r1,  g1,  b1
+    +0.5, -0.5, 0.0, 1.0, 0.0,
 
-    // x2, y2
-    +0.0, +0.5,
-
-    // Add a second triangle:
-    - 0.55f, -0.5,
-
-    -0.05f, +0.5,
-    -0.55f, +0.5
+    // ...
+    +0.0,   +0.5, 0.0, 0.0, 1.0,
+    -0.55f, -0.5, 1.0, 1.0, 0.0,
+    -0.05f, +0.5, 1.0, 0.0, 1.0,
+    -0.55f, +0.5, 0.0, 1.0, 1.0
 };
 
-const uint32_t vertexCount = static_cast<uint32_t>(vertexData.size() / 2);
+const uint32_t vertexCount = static_cast<uint32_t>(vertexData.size() / 5);
 
 namespace
 {
@@ -464,7 +479,7 @@ void Application::MainLoop()
     renderPassColorAttachment.resolveTarget = nullptr;
     renderPassColorAttachment.loadOp = WGPULoadOp_Clear;
     renderPassColorAttachment.storeOp = WGPUStoreOp_Store;
-    renderPassColorAttachment.clearValue = WGPUColor{ 0.9, 0.1, 0.2, 1.0 };
+    renderPassColorAttachment.clearValue = WGPUColor{ 0.2, 0.2, 0.2, 1.0 };
 #ifndef WEBGPU_BACKEND_WGPU
     renderPassColorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
 #endif // NOT WEBGPU_BACKEND_WGPU
@@ -802,6 +817,8 @@ bool Application::GetDevice()
     requiredLimits.maxBufferSize = 6 * 2 * sizeof(float);
     // Maximum stride between 2 consecutive vertices in the vertex buffer
     requiredLimits.maxVertexBufferArrayStride = 2 * sizeof(float);
+
+    requiredLimits.maxInterStageShaderComponents = 3;
     */
 
     deviceDesc.requiredLimits = &requiredLimits; // we do not require any specific limit
@@ -1027,15 +1044,20 @@ bool Application::LoadShaders()
 bool Application::CreatePipeline()
 {
     // Vertex fetch
-    WGPUVertexAttribute positionAttrib;
-    positionAttrib.format = WGPUVertexFormat::WGPUVertexFormat_Float32x2;;
-    positionAttrib.offset = 0;
-    positionAttrib.shaderLocation = 0;
+    std::vector<WGPUVertexAttribute> vertexAttribs(2);
+    vertexAttribs[0].format = WGPUVertexFormat::WGPUVertexFormat_Float32x2;;
+    vertexAttribs[0].offset = 0;
+    vertexAttribs[0].shaderLocation = 0;
 
-    m_VertexBufferLayout.arrayStride = 2 * sizeof(float);
+    vertexAttribs[1].format = WGPUVertexFormat::WGPUVertexFormat_Float32x3;;
+    vertexAttribs[1].offset = 2 * sizeof(float); // starts after x, y position
+    vertexAttribs[1].shaderLocation = 1;
+
+    const uint32_t StrideSize = 5 * sizeof(float);
+    m_VertexBufferLayout.arrayStride = StrideSize;
     m_VertexBufferLayout.stepMode = WGPUVertexStepMode::WGPUVertexStepMode_Vertex;
-    m_VertexBufferLayout.attributeCount = 1;
-    m_VertexBufferLayout.attributes = &positionAttrib;
+    m_VertexBufferLayout.attributeCount = static_cast<uint32_t>(vertexAttribs.size());
+    m_VertexBufferLayout.attributes = vertexAttribs.data();
 
     WGPUMultisampleState multisample{};
     multisample.nextInChain = nullptr;
