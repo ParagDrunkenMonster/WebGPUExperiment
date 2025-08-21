@@ -5,6 +5,7 @@
 
 #include <cassert>
 #include <vector>
+#include <array>
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -17,6 +18,14 @@
 
 const char* shaderSource = R"(
 
+    struct Uniforms {
+        offset: f32,      // offset 0..3
+        // 12 bytes padding
+        color: vec4<f32>, // offset 16..31
+    }; // size = 32 bytes
+
+    @group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
     struct VertexInput {
         @location(0) position: vec2f,
         @location(1) color: vec3f,
@@ -24,18 +33,26 @@ const char* shaderSource = R"(
 
     struct VertexOutput {
         @builtin(position) position: vec4f,
-        // The location here does not refer to a vertex attribute, it just means
-        // that this field must be handled by the rasterizer.
-        // (It can also refer to another field of another struct that would be used
-        // as input to the fragment shader.)
         @location(0) color: vec3f,
     };
 
     @vertex
     fn vs_main(in: VertexInput) -> VertexOutput {
+        
         var out: VertexOutput; // create the output struct
-        out.position = vec4f(in.position, 0.0, 1.0); // same as what we used to directly return
-        out.color = in.color; // forward the color attribute to the fragment shader
+        
+        let ratio = 640.0 / 480.0;
+
+        // We now move the scene depending on the time!
+        var offset = vec2f(uniforms.offset, uniforms.offset);
+
+        out.position = vec4f(in.position.x + offset.x, (in.position.y + offset.y) * ratio, 0.0, 1.0);
+        
+        let color = in.color * uniforms.color.rgb;
+
+        // Gamma-correction
+        out.color = pow(color, vec3f(2.2));
+
         return out;
     }
 
@@ -44,6 +61,12 @@ const char* shaderSource = R"(
         return vec4f(in.color, 1.0); // use the interpolated color coming from the vertex shader
     }
 )";
+
+struct alignas(16) UniformBufferData {
+    float offset;                // offset 0
+    // 12 bytes of padding added by compiler
+    alignas(16) std::array<float, 4> color; // offset 16
+};
 
 
 std::vector<float> vertexData = {
@@ -63,6 +86,12 @@ const uint32_t vertexCount = static_cast<uint32_t>(vertexData.size() / 5);
 
 namespace
 {
+    uint32_t ceilToNextMultiple(uint32_t value, uint32_t step) 
+    {
+        const uint32_t divide_and_ceil = value / step + (value % step == 0 ? 0 : 1);
+        return step * divide_and_ceil;
+    }
+
 #ifdef __EMSCRIPTEN__
     WGPUAdapter requestAdapterSync(WGPUInstance instance, WGPURequestAdapterOptions const*)// options) 
 #else
@@ -249,12 +278,18 @@ Application::Application()
     , m_Surface(nullptr)
     , m_Device(nullptr)
     , m_Queue(nullptr)
+    , m_BindGroupLayout(nullptr)
+    , m_PipelineLayout(nullptr)
+    , m_BindGroup(nullptr)
     , m_Pipeline(nullptr)
     , m_ShaderModule(nullptr)
     , m_VertexBufferSize(0)
     , m_Buffer1(nullptr)
     , m_IndexBufferSize(0)
     , m_IndexBuffer(nullptr)
+    , m_UniformBufferSize(0)
+    , m_UniformBufferStride(0)
+    , m_UniformBuffer(nullptr)
 {
 
 }
@@ -333,6 +368,12 @@ bool Application::Initialize()
         return false;
     }
 
+    if (!CreateUniformBuffer())
+    {
+        std::cerr << "Create uniform buffer failed" << std::endl;
+        return false;
+    }
+
     if (!CreateVertexBuffer())
     {
         std::cerr << "Creating vertex buffer failed" << std::endl;
@@ -365,11 +406,28 @@ void Application::Terminate()
 
     DestroyBuffer(m_Buffer1);
     DestroyBuffer(m_IndexBuffer);
+    DestroyBuffer(m_UniformBuffer);
 
     if (m_ShaderModule)
     {
         wgpuShaderModuleRelease(m_ShaderModule);
         m_ShaderModule = nullptr;
+    }
+
+    if (m_PipelineLayout)
+    {
+        wgpuPipelineLayoutRelease(m_PipelineLayout);
+    }
+    if (m_BindGroupLayout)
+    {
+        wgpuBindGroupLayoutRelease(m_BindGroupLayout);
+        m_BindGroupLayout = nullptr;
+    }
+
+    if (m_BindGroup)
+    {
+        wgpuBindGroupRelease(m_BindGroup);
+        m_BindGroup = nullptr;
     }
 
     if (m_Pipeline)
@@ -506,6 +564,24 @@ void Application::MainLoop()
 #else
     encoderDesc.label = "My command encoder";
 #endif
+
+    const float Time = glfwGetTime();
+    UniformBufferData Data;
+    Data.offset = 0.25f;// glfwGetTime();
+    Data.color[0] = std::fmod(Time, 1.0f);
+    Data.color[1] = std::fmod(Time, 2.0f);
+    Data.color[2] = std::fmod(Time, 1.2f);
+
+    UniformBufferData Data2;
+    Data2.offset = -0.25f;// +glfwGetTime();
+    Data2.color[0] = std::fmod(Time, 1.0f);
+    Data2.color[1] = std::fmod(Time, 2.0f);
+    Data2.color[2] = std::fmod(Time, 1.2f);
+
+    wgpuQueueWriteBuffer(m_Queue, m_UniformBuffer, 0, &Data, sizeof(UniformBufferData));
+    wgpuQueueWriteBuffer(m_Queue, m_UniformBuffer, m_UniformBufferStride, &Data2, sizeof(UniformBufferData));
+
+
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(m_Device, &encoderDesc);
 
     // [...] Describe Render Pass
@@ -520,10 +596,15 @@ void Application::MainLoop()
 
     wgpuRenderPassEncoderSetIndexBuffer(renderPass, m_IndexBuffer, WGPUIndexFormat_Uint16, 0, m_IndexBufferSize);
 
-
-    // We use the `vertexCount` variable instead of hard-coding the vertex count
-   // wgpuRenderPassEncoderDraw(renderPass, vertexCount, 1, 0, 0);
     const uint32_t IndicesCount = (uint32_t)indexData.size();
+
+    // Set binding group
+    uint32_t dynamicOffset = 0 * m_UniformBufferStride;
+    wgpuRenderPassEncoderSetBindGroup(renderPass, 0, m_BindGroup, 1, &dynamicOffset);
+    wgpuRenderPassEncoderDrawIndexed(renderPass, IndicesCount, 1, 0, 0, 0);
+
+    dynamicOffset = 1 * m_UniformBufferStride;
+    wgpuRenderPassEncoderSetBindGroup(renderPass, 0, m_BindGroup, 1, &dynamicOffset);
     wgpuRenderPassEncoderDrawIndexed(renderPass, IndicesCount, 1, 0, 0, 0);
  
     // [...] Use Render Pass
@@ -1053,8 +1134,75 @@ bool Application::LoadShaders()
     return m_ShaderModule != nullptr;
 }
 
+void setDefault(WGPUBindGroupLayoutEntry& bindingLayout) 
+{
+    bindingLayout.nextInChain = nullptr;
+    bindingLayout.binding = 0;
+    bindingLayout.visibility = WGPUShaderStage_Vertex;
+
+    bindingLayout.buffer.nextInChain = nullptr;
+    bindingLayout.buffer.type = WGPUBufferBindingType_Undefined;
+    bindingLayout.buffer.hasDynamicOffset = true;
+    bindingLayout.buffer.minBindingSize = 0;
+
+    bindingLayout.sampler.nextInChain = nullptr;
+    bindingLayout.sampler.type = WGPUSamplerBindingType_Undefined;
+
+    bindingLayout.storageTexture.nextInChain = nullptr;
+    bindingLayout.storageTexture.access = WGPUStorageTextureAccess_Undefined;
+    bindingLayout.storageTexture.format = WGPUTextureFormat_Undefined;
+    bindingLayout.storageTexture.viewDimension = WGPUTextureViewDimension_Undefined;
+
+    bindingLayout.texture.nextInChain = nullptr;
+    bindingLayout.texture.multisampled = false;
+    bindingLayout.texture.sampleType = WGPUTextureSampleType_Undefined;
+    bindingLayout.texture.viewDimension = WGPUTextureViewDimension_Undefined;
+}
+
 bool Application::CreatePipeline()
 {
+    // The buffer will only contain 1 float with the value of uTime
+    // then 3 floats left empty but needed by alignment constraints
+    m_UniformBufferStride = ceilToNextMultiple((uint32_t)sizeof(UniformBufferData), (uint32_t)m_DeviceLimits.minUniformBufferOffsetAlignment);
+
+    m_UniformBufferSize = m_UniformBufferStride * 2;
+
+    // Define binding layout
+    WGPUBindGroupLayoutEntry uTimeBindingLayout{};
+    //setDefault(uTimeBindingLayout);
+    uTimeBindingLayout.nextInChain = nullptr;
+
+    uTimeBindingLayout.buffer.nextInChain = nullptr;
+    uTimeBindingLayout.buffer.minBindingSize = sizeof(UniformBufferData);
+    uTimeBindingLayout.buffer.type = WGPUBufferBindingType_Uniform;
+    uTimeBindingLayout.buffer.hasDynamicOffset = true;
+    
+    uTimeBindingLayout.binding = 0;
+    uTimeBindingLayout.visibility = WGPUShaderStage_Vertex;
+
+    uTimeBindingLayout.sampler.nextInChain = nullptr;
+
+    uTimeBindingLayout.storageTexture.nextInChain = nullptr;
+
+    uTimeBindingLayout.texture.nextInChain = nullptr;
+
+
+    // Binding layout
+    WGPUBindGroupLayoutDescriptor bindGroupLayoutDesc{};
+    bindGroupLayoutDesc.nextInChain = nullptr;
+    bindGroupLayoutDesc.entryCount = 1;
+    bindGroupLayoutDesc.entries = &uTimeBindingLayout;
+
+    m_BindGroupLayout = wgpuDeviceCreateBindGroupLayout(m_Device, &bindGroupLayoutDesc);
+
+    // Create the pipeline layout
+    WGPUPipelineLayoutDescriptor layoutDesc{};
+    layoutDesc.nextInChain = nullptr;
+    layoutDesc.bindGroupLayoutCount = 1;
+    layoutDesc.bindGroupLayouts = &m_BindGroupLayout;
+    m_PipelineLayout = wgpuDeviceCreatePipelineLayout(m_Device, &layoutDesc);
+
+
     // Vertex fetch
     std::vector<WGPUVertexAttribute> vertexAttribs(2);
     vertexAttribs[0].format = WGPUVertexFormat::WGPUVertexFormat_Float32x2;;
@@ -1150,7 +1298,7 @@ bool Application::CreatePipeline()
 #else
     pipelineDesc.label = "Main Pipeline";
 #endif
-    pipelineDesc.layout = nullptr;
+    pipelineDesc.layout = m_PipelineLayout;
     pipelineDesc.vertex = vertex;
     pipelineDesc.primitive = primitive;
     pipelineDesc.depthStencil = nullptr;
@@ -1268,6 +1416,48 @@ bool Application::CreateIndexBuffer()
 
     // Upload geometry data to the buffer
     //wgpuQueueWriteBuffer(m_Queue, m_Buffer1, 0, vertexData.data(), bufferDesc.size);
+
+    return true;
+}
+
+bool Application::CreateUniformBuffer()
+{
+    WGPUBufferDescriptor uniformBufferDesc{};
+    uniformBufferDesc.nextInChain = nullptr;
+    uniformBufferDesc.size = m_UniformBufferSize;
+    uniformBufferDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_Uniform; // GPU-only
+    uniformBufferDesc.mappedAtCreation = false;
+
+    m_UniformBuffer = wgpuDeviceCreateBuffer(m_Device, &uniformBufferDesc);
+
+
+    UniformBufferData Data;
+    Data.offset = 0.0f;
+    Data.color = { 1.0f, 1.0f, 1.0 };
+    wgpuQueueWriteBuffer(m_Queue, m_UniformBuffer, 0, &Data, sizeof(UniformBufferData));
+
+    Data.offset = 1.0f;
+    Data.color = { 2.0f, 1.0f, 1.0 };
+    wgpuQueueWriteBuffer(m_Queue, m_UniformBuffer, m_UniformBufferStride, &Data, sizeof(UniformBufferData));
+
+    // Create a binding
+    WGPUBindGroupEntry binding{};
+    binding.nextInChain = nullptr;
+    binding.binding = 0;
+    binding.buffer = m_UniformBuffer;
+    binding.offset = 0;
+    binding.size = sizeof(UniformBufferData); // 32;
+    binding.sampler = nullptr;
+    binding.textureView = nullptr;
+
+    // A bind group contains one or multiple bindings
+    WGPUBindGroupDescriptor bindGroupDesc{};
+    bindGroupDesc.nextInChain = nullptr;
+    bindGroupDesc.layout = m_BindGroupLayout;
+    // There must be as many bindings as declared in the layout!
+    bindGroupDesc.entryCount = 1;
+    bindGroupDesc.entries = &binding;
+    m_BindGroup = wgpuDeviceCreateBindGroup(m_Device, &bindGroupDesc);
 
     return true;
 }

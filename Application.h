@@ -52,6 +52,7 @@ private:
     bool GetQueue();
     bool LoadShaders();
     bool CreatePipeline();
+    bool CreateUniformBuffer();
     bool CreateVertexBuffer();
     bool CreateIndexBuffer();
     void DestroyBuffer(WGPUBuffer& Buffer);
@@ -75,6 +76,11 @@ private:
 
     WGPUQueue m_Queue;
 
+    WGPUBindGroupLayout m_BindGroupLayout;
+    WGPUPipelineLayout m_PipelineLayout;
+
+    WGPUBindGroup m_BindGroup;
+
     WGPURenderPipeline m_Pipeline;
 
     WGPUTextureFormat m_SurfaceFormat = WGPUTextureFormat_Undefined;
@@ -88,6 +94,11 @@ private:
 
     uint32_t m_IndexBufferSize;
     WGPUBuffer m_IndexBuffer;
+
+    uint32_t m_UniformBufferSize;
+    uint32_t m_UniformBufferStride;
+    WGPUBuffer m_UniformBuffer;
+
 };
 
 

@@ -3,3 +3,13 @@ cmake . -B build
 
 compile
 cmake --build build
+
+for creating web project
+emcmake cmake -B build-web
+
+for web compiling
+cmake --build build-web
+
+for running the server
+emrun --port 8080 build-web
+
