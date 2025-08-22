@@ -6,6 +6,8 @@
 #include <cassert>
 #include <vector>
 #include <array>
+#include <PANDUMatrix44.h>
+#include <PANDUVector4.h>
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -18,13 +20,25 @@
 
 const char* shaderSource = R"(
 
-    struct Uniforms {
-        offset: f32,      // offset 0..3
-        // 12 bytes padding
-        color: vec4<f32>, // offset 16..31
-    }; // size = 32 bytes
+    struct ConstantUniforms {
+        projectionMatrix    : mat4x4<f32>,
+        viewMatrix          : mat4x4<f32>,
+        invProjectionMatrix : mat4x4<f32>,
+        invViewMatrix       : mat4x4<f32>,
+        totalTime : f32,
+        deltaTime : f32,
+        // pad to 16B if needed
+    };
 
-    @group(0) @binding(0) var<uniform> uniforms: Uniforms;
+    struct DynamicUniforms {
+        modelMatrix    : mat4x4<f32>,
+        invModelMatrix : mat4x4<f32>,
+        color          : vec4<f32>,
+    };
+
+    @group(0) @binding(0) var<uniform> constUniforms : ConstantUniforms;
+    @group(0) @binding(1) var<uniform> dynUniforms   : DynamicUniforms;
+
 
     struct VertexInput {
         @location(0) position: vec3f,
@@ -43,12 +57,8 @@ const char* shaderSource = R"(
         
         let ratio = 640.0 / 480.0;
 
-        // We now move the scene depending on the time!
-        var offset = vec2f(uniforms.offset, uniforms.offset);
-
-        out.position = vec4f(in.position.x + offset.x, (in.position.y + offset.y) * ratio, in.position.z, 1.0);
-        
-        let color = in.color * uniforms.color.rgb;
+        out.position = dynUniforms.modelMatrix * vec4f(in.position, 1.0);
+        let color = in.color * dynUniforms.color.rgb;
 
         // Gamma-correction
         out.color = pow(color, vec3f(2.2));
@@ -62,11 +72,25 @@ const char* shaderSource = R"(
     }
 )";
 
-struct alignas(16) UniformBufferData {
-    float offset;                // offset 0
-    // 12 bytes of padding added by compiler
-    alignas(16) std::array<float, 4> color; // offset 16
+struct alignas(16) ConstantUniforms
+{
+    std::array<float, 16> projectionMatrix;
+    std::array<float, 16> viewMatrix;
+    std::array<float, 16> invProjectionMatrix;
+    std::array<float, 16> invViewMatrix;
+    float totalTime;
+    float pad[3];
+    float deltaTime;
+    float pad2[3];
 };
+
+struct alignas(16) DynamicUniforms
+{
+    std::array<float, 16> modelMatrix;
+    std::array<float, 16> invModelMatrix;
+    std::array<float, 4> color;
+};
+
 
 
 std::vector<float> vertexData = {
@@ -92,8 +116,34 @@ std::vector<uint16_t> indexData = {
 
 const uint32_t vertexCount = static_cast<uint32_t>(vertexData.size() / 6);
 
+const uint32_t maxDrawCallsPerFrameSupported = 1024;
+
 namespace
 {
+    void FillConstantUniform(ConstantUniforms& OutUniform, const Pandu::Matrix44& Projection, const Pandu::Matrix44& View, float TotalTime, float DeltaTime)
+    {
+        Pandu::Matrix44 InvProjection = Projection.GetInverse(), InvView = View.GetInverse();
+
+        std::copy(&Projection.m[0][0], (&Projection.m[0][0]) + 16, OutUniform.projectionMatrix.begin());
+        std::copy(&View.m[0][0], (&View.m[0][0]) + 16, OutUniform.viewMatrix.begin());
+
+        std::copy(&InvProjection.m[0][0], (&InvProjection.m[0][0]) + 16, OutUniform.invProjectionMatrix.begin());
+        std::copy(&InvView.m[0][0], (&InvView.m[0][0]) + 16, OutUniform.invViewMatrix.begin());
+
+        OutUniform.totalTime = TotalTime;
+        OutUniform.deltaTime = DeltaTime;
+    }
+
+    void FillDynamicUniform(DynamicUniforms& OutUniform, const Pandu::Matrix44& Model, const Pandu::Vector4& Color)
+    {
+        Pandu::Matrix44 InvModel = Model.GetInverse();
+
+        std::copy(&Model.m[0][0], (&Model.m[0][0]) + 16, OutUniform.modelMatrix.begin());
+        std::copy(&InvModel.m[0][0], (&InvModel.m[0][0]) + 16, OutUniform.invModelMatrix.begin());
+
+        std::copy(&Color.Data()[0], (&Color.Data()[0]) + 4, OutUniform.color.begin());
+    }
+
     uint32_t ceilToNextMultiple(uint32_t value, uint32_t step) 
     {
         const uint32_t divide_and_ceil = value / step + (value % step == 0 ? 0 : 1);
@@ -295,8 +345,10 @@ Application::Application()
     , m_Buffer1(nullptr)
     , m_IndexBufferSize(0)
     , m_IndexBuffer(nullptr)
-    , m_UniformBufferSize(0)
-    , m_UniformBufferStride(0)
+    , m_ConstantUniformBufferSize(0)
+    , m_ConstantUniformBufferStride(0)
+    , m_DynamicsUniformBufferSize(0)
+    , m_DynamicsUniformBufferStride(0)
     , m_UniformBuffer(nullptr)
     , m_DepthTexture(nullptr)
     , m_DepthTextureView(nullptr)
@@ -604,27 +656,30 @@ void Application::MainLoop()
 
     WGPUCommandEncoderDescriptor encoderDesc = {};
     encoderDesc.nextInChain = nullptr;
-#ifdef __EMSCRIPTEN__
-    //encoderDesc.label = "My command encoder";
-#else
-    encoderDesc.label = "My command encoder";
-#endif
+
+    SET_WGPU_LABEL(encoderDesc, "My command encoder");
 
     const float Time = (float)glfwGetTime();
-    UniformBufferData Data;
-    Data.offset = 0.25f;// glfwGetTime();
-    Data.color[0] = std::fmod(Time, 1.0f);
-    Data.color[1] = std::fmod(Time, 2.0f);
-    Data.color[2] = std::fmod(Time, 1.2f);
+    static float TotalTime = 0;
 
-    UniformBufferData Data2;
-    Data2.offset = -0.25f;// +glfwGetTime();
-    Data2.color[0] = std::fmod(Time, 1.0f);
-    Data2.color[1] = std::fmod(Time, 2.0f);
-    Data2.color[2] = std::fmod(Time, 1.2f);
+    ConstantUniforms ConstData;
+    FillConstantUniform(ConstData, Pandu::Matrix44::IDENTITY, Pandu::Matrix44::IDENTITY, TotalTime, Time);
+    wgpuQueueWriteBuffer(m_Queue, m_UniformBuffer, 0, &ConstData, sizeof(ConstantUniforms));
 
-    wgpuQueueWriteBuffer(m_Queue, m_UniformBuffer, 0, &Data, sizeof(UniformBufferData));
-    wgpuQueueWriteBuffer(m_Queue, m_UniformBuffer, m_UniformBufferStride, &Data2, sizeof(UniformBufferData));
+    int ObjIndex = 0;
+    Pandu::Matrix44 Translate0 = Pandu::Matrix44::IDENTITY;
+    Translate0.SetTranslate(Pandu::Vector3(-0.5f, -0.5f, -0.25f));
+    DynamicUniforms DynData;
+    FillDynamicUniform(DynData, Translate0, Pandu::Vector4::UNIT);
+    wgpuQueueWriteBuffer(m_Queue, m_UniformBuffer, m_ConstantUniformBufferStride + m_DynamicsUniformBufferStride * ObjIndex, &DynData, sizeof(DynamicUniforms));
+
+    // for second object
+    Pandu::Matrix44 Translate1 = Pandu::Matrix44::IDENTITY;
+    Translate1.SetTranslate(Pandu::Vector3(0.5f, 0.5f, -0.25f));
+    ObjIndex++;
+    DynamicUniforms DynData1;
+    FillDynamicUniform(DynData1, Translate1, Pandu::Vector4::UNIT);
+    wgpuQueueWriteBuffer(m_Queue, m_UniformBuffer, m_ConstantUniformBufferStride + m_DynamicsUniformBufferStride * ObjIndex, &DynData1, sizeof(DynamicUniforms));
 
 
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(m_Device, &encoderDesc);
@@ -644,11 +699,11 @@ void Application::MainLoop()
     const uint32_t IndicesCount = (uint32_t)indexData.size();
 
     // Set binding group
-    uint32_t dynamicOffset = 0 * m_UniformBufferStride;
+    uint32_t dynamicOffset = 0 * m_DynamicsUniformBufferStride;
     wgpuRenderPassEncoderSetBindGroup(renderPass, 0, m_BindGroup, 1, &dynamicOffset);
     wgpuRenderPassEncoderDrawIndexed(renderPass, IndicesCount, 1, 0, 0, 0);
 
-    dynamicOffset = 1 * m_UniformBufferStride;
+    dynamicOffset = 1 * m_DynamicsUniformBufferStride;
     wgpuRenderPassEncoderSetBindGroup(renderPass, 0, m_BindGroup, 1, &dynamicOffset);
     wgpuRenderPassEncoderDrawIndexed(renderPass, IndicesCount, 1, 0, 0, 0);
  
@@ -700,11 +755,9 @@ void Application::GetNextSurfaceViewData(std::pair<WGPUSurfaceTexture, WGPUTextu
 
     WGPUTextureViewDescriptor viewDescriptor;
     viewDescriptor.nextInChain = nullptr;
-#ifdef __EMSCRIPTEN__
-    //viewDescriptor.label = "Surface texture view";
-#else
-    viewDescriptor.label = "Surface texture view";
-#endif
+
+    SET_WGPU_LABEL(viewDescriptor, "Surface texture view");
+
     viewDescriptor.format = wgpuTextureGetFormat(surfaceTexture.texture);
     viewDescriptor.dimension = WGPUTextureViewDimension_2D;
     viewDescriptor.baseMipLevel = 0;
@@ -929,12 +982,12 @@ bool Application::GetDevice()
     WGPUDeviceDescriptor deviceDesc = {};
     deviceDesc.nextInChain = nullptr;
 
-   
+    WGPUQueueDescriptor& defaultQueue = deviceDesc.defaultQueue;
+
+    SET_WGPU_LABEL(deviceDesc, "My Device");
+    SET_WGPU_LABEL(defaultQueue, "he Default Queue");
 
 #ifdef __EMSCRIPTEN__
-    //deviceDesc.label = "My Device"; // anything works here, that's your call
-    //deviceDesc.defaultQueue.label = "The default queue";
-
     WGPULimits requiredLimits{};
     requiredLimits = m_AdopterLimits;
 
@@ -966,10 +1019,6 @@ bool Application::GetDevice()
 
     deviceDesc.uncapturedErrorCallbackInfo = uncapturedErrorCallbackInfo;
 
-    //WGPUStringView label;
-    //label.
-    //deviceDesc.defaultQueue.label = "The default queue";
-
     auto deviceLostCallback = [](WGPUDevice const*, WGPUDeviceLostReason reason, WGPUStringView message, void* userdata1, void*) {
         std::cout << "Device lost: reason " << reason << ", UserData : " << (userdata1 ? userdata1 : "nullptr") << std::endl;
         std::cout << " (" << (message.length > 0 ? message.data : "") << ")";
@@ -986,8 +1035,6 @@ bool Application::GetDevice()
     deviceDesc.deviceLostCallbackInfo = deviceLostCallbackInfo;
 
 #else
-    deviceDesc.label = "My Device"; // anything works here, that's your call
-    deviceDesc.defaultQueue.label = "The default queue";
 
     WGPURequiredLimits requiredLimits{};
     requiredLimits.limits = m_AdopterLimits;
@@ -1143,7 +1190,6 @@ bool Application::LoadShaders()
 
     WGPUShaderModuleDescriptor shaderDesc{};
     shaderDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&shaderCodeDesc);;
-    //shaderDesc.label = "Basic Shader";
 #else
     WGPUShaderModuleWGSLDescriptor shaderCodeDesc{};
     // Set the chained struct's header
@@ -1153,8 +1199,9 @@ bool Application::LoadShaders()
 
     WGPUShaderModuleDescriptor shaderDesc{};
     shaderDesc.nextInChain = reinterpret_cast<const WGPUChainedStruct*>(&shaderCodeDesc);;
-    shaderDesc.label = "Basic Shader";
 #endif
+
+    SET_WGPU_LABEL(shaderDesc, "Basic Shader");
 
    
 #ifdef WEBGPU_BACKEND_WGPU
@@ -1166,31 +1213,6 @@ bool Application::LoadShaders()
     m_ShaderModule = wgpuDeviceCreateShaderModule(m_Device, &shaderDesc);
 
     return m_ShaderModule != nullptr;
-}
-
-void setDefault(WGPUBindGroupLayoutEntry& bindingLayout) 
-{
-    bindingLayout.nextInChain = nullptr;
-    bindingLayout.binding = 0;
-    bindingLayout.visibility = WGPUShaderStage_Vertex;
-
-    bindingLayout.buffer.nextInChain = nullptr;
-    bindingLayout.buffer.type = WGPUBufferBindingType_Undefined;
-    bindingLayout.buffer.hasDynamicOffset = true;
-    bindingLayout.buffer.minBindingSize = 0;
-
-    bindingLayout.sampler.nextInChain = nullptr;
-    bindingLayout.sampler.type = WGPUSamplerBindingType_Undefined;
-
-    bindingLayout.storageTexture.nextInChain = nullptr;
-    bindingLayout.storageTexture.access = WGPUStorageTextureAccess_Undefined;
-    bindingLayout.storageTexture.format = WGPUTextureFormat_Undefined;
-    bindingLayout.storageTexture.viewDimension = WGPUTextureViewDimension_Undefined;
-
-    bindingLayout.texture.nextInChain = nullptr;
-    bindingLayout.texture.multisampled = false;
-    bindingLayout.texture.sampleType = WGPUTextureSampleType_Undefined;
-    bindingLayout.texture.viewDimension = WGPUTextureViewDimension_Undefined;
 }
 
 void setDefaultDepthStencilFace(WGPUStencilFaceState& stencilFaceState)
@@ -1212,7 +1234,11 @@ bool Application::CreatePipeline()
     depthStencilState.depthBiasSlopeScale = 0;
     depthStencilState.depthBiasClamp = 0;
     depthStencilState.depthCompare = WGPUCompareFunction_Less;
+#ifdef __EMSCRIPTEN__
+    depthStencilState.depthWriteEnabled = WGPUOptionalBool_True;
+#else
     depthStencilState.depthWriteEnabled = true;
+#endif
     depthStencilState.format = WGPUTextureFormat_Depth24Plus;
     setDefaultDepthStencilFace(depthStencilState.stencilFront);
     setDefaultDepthStencilFace(depthStencilState.stencilBack);
@@ -1220,7 +1246,9 @@ bool Application::CreatePipeline()
     // Create the depth texture
     WGPUTextureDescriptor depthTextureDesc;
     depthTextureDesc.nextInChain = nullptr;
-    depthTextureDesc.label = "Depth Texture";
+
+    SET_WGPU_LABEL(depthTextureDesc, "Depth Texture");
+
     depthTextureDesc.dimension = WGPUTextureDimension_2D;
     depthTextureDesc.format = depthStencilState.format;
     depthTextureDesc.mipLevelCount = 1;
@@ -1234,7 +1262,9 @@ bool Application::CreatePipeline()
     // Create the view of the depth texture manipulated by the rasterizer
     WGPUTextureViewDescriptor depthTextureViewDesc;
     depthTextureViewDesc.nextInChain = nullptr;
-    depthTextureViewDesc.label = "Depth texture view";
+
+    SET_WGPU_LABEL(depthTextureViewDesc, "Depth texture view");
+
     depthTextureViewDesc.aspect = WGPUTextureAspect_DepthOnly;
     depthTextureViewDesc.baseArrayLayer = 0;
     depthTextureViewDesc.arrayLayerCount = 1;
@@ -1244,44 +1274,46 @@ bool Application::CreatePipeline()
     depthTextureViewDesc.format = depthStencilState.format;
     m_DepthTextureView = wgpuTextureCreateView(m_DepthTexture, &depthTextureViewDesc);
 
-    
-    // The buffer will only contain 1 float with the value of uTime
-    // then 3 floats left empty but needed by alignment constraints
-    m_UniformBufferStride = ceilToNextMultiple((uint32_t)sizeof(UniformBufferData), (uint32_t)m_DeviceLimits.minUniformBufferOffsetAlignment);
 
-    m_UniformBufferSize = m_UniformBufferStride * 2;
+    m_ConstantUniformBufferStride = ceilToNextMultiple((uint32_t)sizeof(ConstantUniforms), (uint32_t)m_DeviceLimits.minUniformBufferOffsetAlignment);
+    m_ConstantUniformBufferSize = m_ConstantUniformBufferStride;
 
-    // Define binding layout
-    WGPUBindGroupLayoutEntry uTimeBindingLayout{};
-    //setDefault(uTimeBindingLayout);
-    uTimeBindingLayout.nextInChain = nullptr;
+    m_DynamicsUniformBufferStride = ceilToNextMultiple(sizeof(DynamicUniforms), m_DeviceLimits.minUniformBufferOffsetAlignment);
+    m_DynamicsUniformBufferSize = m_DynamicsUniformBufferStride * maxDrawCallsPerFrameSupported;
 
-    uTimeBindingLayout.buffer.nextInChain = nullptr;
-    uTimeBindingLayout.buffer.minBindingSize = sizeof(UniformBufferData);
-    uTimeBindingLayout.buffer.type = WGPUBufferBindingType_Uniform;
-    uTimeBindingLayout.buffer.hasDynamicOffset = true;
-    
-    uTimeBindingLayout.binding = 0;
-    uTimeBindingLayout.visibility = WGPUShaderStage_Vertex;
+    WGPUBindGroupLayoutEntry BindingLayout[2] = {};
 
-    uTimeBindingLayout.sampler.nextInChain = nullptr;
+    // --- Per frame constant buffer (binding = 0) ---
+    BindingLayout[0].binding = 0;
+    BindingLayout[0].visibility = WGPUShaderStage_Vertex;
+    BindingLayout[0].buffer.type = WGPUBufferBindingType_Uniform;
+    BindingLayout[0].buffer.hasDynamicOffset = false;
+    BindingLayout[0].buffer.minBindingSize = sizeof(ConstantUniforms);
 
-    uTimeBindingLayout.storageTexture.nextInChain = nullptr;
+    // --- Per draw call dynamic buffer (binding = 1) ---
+    BindingLayout[1].binding = 1;
+    BindingLayout[1].visibility = WGPUShaderStage_Vertex;
+    BindingLayout[1].buffer.type = WGPUBufferBindingType_Uniform;
+    BindingLayout[1].buffer.hasDynamicOffset = true;
+    BindingLayout[1].buffer.minBindingSize = sizeof(DynamicUniforms);
 
-    uTimeBindingLayout.texture.nextInChain = nullptr;
-
-
-    // Binding layout
+        // Binding layout
     WGPUBindGroupLayoutDescriptor bindGroupLayoutDesc{};
     bindGroupLayoutDesc.nextInChain = nullptr;
-    bindGroupLayoutDesc.entryCount = 1;
-    bindGroupLayoutDesc.entries = &uTimeBindingLayout;
+
+    SET_WGPU_LABEL(bindGroupLayoutDesc, "Bind Layout");
+
+    bindGroupLayoutDesc.entryCount = 2;
+    bindGroupLayoutDesc.entries = BindingLayout;
 
     m_BindGroupLayout = wgpuDeviceCreateBindGroupLayout(m_Device, &bindGroupLayoutDesc);
 
     // Create the pipeline layout
     WGPUPipelineLayoutDescriptor layoutDesc{};
     layoutDesc.nextInChain = nullptr;
+
+    SET_WGPU_LABEL(layoutDesc, "Layout Desc");
+
     layoutDesc.bindGroupLayoutCount = 1;
     layoutDesc.bindGroupLayouts = &m_BindGroupLayout;
     m_PipelineLayout = wgpuDeviceCreatePipelineLayout(m_Device, &layoutDesc);
@@ -1373,15 +1405,9 @@ bool Application::CreatePipeline()
 
     WGPURenderPipelineDescriptor pipelineDesc{};
     pipelineDesc.nextInChain = nullptr;
-#ifdef __EMSCRIPTEN__
-    WGPUStringView pipeline_label{};
-    pipeline_label.data = "Main Pipeline";
-    pipeline_label.length = strlen(pipeline_label.data);
 
-    pipelineDesc.label = pipeline_label;
-#else
-    pipelineDesc.label = "Main Pipeline";
-#endif
+    SET_WGPU_LABEL(pipelineDesc, "Main Pipeline");
+
     pipelineDesc.layout = m_PipelineLayout;
     pipelineDesc.vertex = vertex;
     pipelineDesc.primitive = primitive;
@@ -1422,14 +1448,8 @@ bool Application::CreateVertexBuffer()
 
     WGPUCommandEncoderDescriptor encoderDesc{};
     encoderDesc.nextInChain = nullptr;
-#ifdef __EMSCRIPTEN__
-    WGPUStringView encoderDescLabel{};
-    encoderDescLabel.data = "Upload Encoder";
-    encoderDescLabel.length = strlen(encoderDescLabel.data);
-    encoderDesc.label = encoderDescLabel;
-#else
-    encoderDesc.label = "Upload Encoder";
-#endif
+
+    SET_WGPU_LABEL(encoderDesc, "Upload Encoder");
 
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(m_Device, &encoderDesc);
 
@@ -1477,14 +1497,8 @@ bool Application::CreateIndexBuffer()
 
     WGPUCommandEncoderDescriptor encoderDesc{};
     encoderDesc.nextInChain = nullptr;
-#ifdef __EMSCRIPTEN__
-    WGPUStringView encoderDescLabel{};
-    encoderDescLabel.data = "Upload Encoder";
-    encoderDescLabel.length = strlen(encoderDescLabel.data);
-    encoderDesc.label = encoderDescLabel;
-#else
-    encoderDesc.label = "Upload Encoder";
-#endif
+
+    SET_WGPU_LABEL(encoderDesc, "Upload Index Encoder");
 
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(m_Device, &encoderDesc);
 
@@ -1509,39 +1523,46 @@ bool Application::CreateUniformBuffer()
 {
     WGPUBufferDescriptor uniformBufferDesc{};
     uniformBufferDesc.nextInChain = nullptr;
-    uniformBufferDesc.size = m_UniformBufferSize;
+    uniformBufferDesc.size = m_ConstantUniformBufferSize + m_DynamicsUniformBufferSize;
     uniformBufferDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_Uniform; // GPU-only
     uniformBufferDesc.mappedAtCreation = false;
 
     m_UniformBuffer = wgpuDeviceCreateBuffer(m_Device, &uniformBufferDesc);
 
+    ConstantUniforms ConstData;
+    FillConstantUniform(ConstData, Pandu::Matrix44::IDENTITY, Pandu::Matrix44::IDENTITY, 0.0f, 0.0f);
+    wgpuQueueWriteBuffer(m_Queue, m_UniformBuffer, 0, &ConstData, sizeof(ConstantUniforms));
 
-    UniformBufferData Data;
-    Data.offset = 0.0f;
-    Data.color = { 1.0f, 1.0f, 1.0 };
-    wgpuQueueWriteBuffer(m_Queue, m_UniformBuffer, 0, &Data, sizeof(UniformBufferData));
-
-    Data.offset = 1.0f;
-    Data.color = { 2.0f, 1.0f, 1.0 };
-    wgpuQueueWriteBuffer(m_Queue, m_UniformBuffer, m_UniformBufferStride, &Data, sizeof(UniformBufferData));
+    DynamicUniforms DynData;
+    FillDynamicUniform(DynData, Pandu::Matrix44::IDENTITY, Pandu::Vector4::UNIT);
+    wgpuQueueWriteBuffer(m_Queue, m_UniformBuffer, m_ConstantUniformBufferStride, &DynData, sizeof(DynamicUniforms));
 
     // Create a binding
-    WGPUBindGroupEntry binding{};
-    binding.nextInChain = nullptr;
-    binding.binding = 0;
-    binding.buffer = m_UniformBuffer;
-    binding.offset = 0;
-    binding.size = sizeof(UniformBufferData); // 32;
-    binding.sampler = nullptr;
-    binding.textureView = nullptr;
+    WGPUBindGroupEntry binding[2];
+    binding[0].nextInChain = nullptr;
+    binding[0].binding = 0;
+    binding[0].buffer = m_UniformBuffer;
+    binding[0].offset = 0;
+    binding[0].size = sizeof(ConstantUniforms); // 32;
+    binding[0].sampler = nullptr;
+    binding[0].textureView = nullptr;
+
+    binding[1].nextInChain = nullptr;
+    binding[1].binding = 1;
+    binding[1].buffer = m_UniformBuffer;
+    binding[1].offset = m_ConstantUniformBufferStride;
+    binding[1].size = sizeof(DynamicUniforms); ;
+    binding[1].sampler = nullptr;
+    binding[1].textureView = nullptr;
+
 
     // A bind group contains one or multiple bindings
     WGPUBindGroupDescriptor bindGroupDesc{};
     bindGroupDesc.nextInChain = nullptr;
     bindGroupDesc.layout = m_BindGroupLayout;
     // There must be as many bindings as declared in the layout!
-    bindGroupDesc.entryCount = 1;
-    bindGroupDesc.entries = &binding;
+    bindGroupDesc.entryCount = 2;
+    bindGroupDesc.entries = binding;
     m_BindGroup = wgpuDeviceCreateBindGroup(m_Device, &bindGroupDesc);
 
     return true;

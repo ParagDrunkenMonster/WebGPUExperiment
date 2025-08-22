@@ -7727,6 +7727,37 @@ async function createWasm() {
       return ptr;
     };
 
+  
+  var _wgpuDeviceCreateTexture = (devicePtr, descriptor) => {
+      assert(descriptor);assert(HEAPU32[((descriptor)>>2)] === 0);
+  
+      var desc = {
+        "label": WebGPU.makeStringFromOptionalStringView(
+          descriptor + 4),
+        "size": WebGPU.makeExtent3D(descriptor + 28),
+        "mipLevelCount": HEAPU32[(((descriptor)+(44))>>2)],
+        "sampleCount": HEAPU32[(((descriptor)+(48))>>2)],
+        "dimension": WebGPU.TextureDimension[
+          HEAPU32[(((descriptor)+(24))>>2)]],
+        "format": WebGPU.TextureFormat[
+          HEAPU32[(((descriptor)+(40))>>2)]],
+        "usage": HEAPU32[(((descriptor)+(16))>>2)],
+      };
+  
+      var viewFormatCount = HEAPU32[(((descriptor)+(52))>>2)];
+      if (viewFormatCount) {
+        var viewFormatsPtr = HEAPU32[(((descriptor)+(56))>>2)];
+        // viewFormatsPtr pointer to an array of TextureFormat which is an enum of size uint32_t
+        desc['viewFormats'] = Array.from(HEAP32.subarray((((viewFormatsPtr)>>2)), ((viewFormatsPtr + viewFormatCount * 4)>>2)),
+          format => WebGPU.TextureFormat[format]);
+      }
+  
+      var device = WebGPU.getJsObject(devicePtr);
+      var ptr = _emwgpuCreateTexture(0);
+      WebGPU.Internals.jsObjectInsert(ptr, device.createTexture(desc));
+      return ptr;
+    };
+
   var _wgpuDeviceGetLimits = (devicePtr, limitsOutPtr) => {
       var device = WebGPU.getJsObject(devicePtr);
       WebGPU.fillLimitStruct(device.limits, limitsOutPtr);
@@ -7961,6 +7992,10 @@ async function createWasm() {
       var ptr = _emwgpuCreateTextureView(0);
       WebGPU.Internals.jsObjectInsert(ptr, texture.createView(desc));
       return ptr;
+    };
+
+  var _wgpuTextureDestroy = (texturePtr) => {
+      WebGPU.getJsObject(texturePtr).destroy();
     };
 
   var _wgpuTextureGetFormat = (texturePtr) => {
@@ -8943,6 +8978,8 @@ var wasmImports = {
   /** @export */
   wgpuDeviceCreateRenderPipeline: _wgpuDeviceCreateRenderPipeline,
   /** @export */
+  wgpuDeviceCreateTexture: _wgpuDeviceCreateTexture,
+  /** @export */
   wgpuDeviceGetLimits: _wgpuDeviceGetLimits,
   /** @export */
   wgpuInstanceCreateSurface: _wgpuInstanceCreateSurface,
@@ -8968,6 +9005,8 @@ var wasmImports = {
   wgpuSurfaceGetCurrentTexture: _wgpuSurfaceGetCurrentTexture,
   /** @export */
   wgpuTextureCreateView: _wgpuTextureCreateView,
+  /** @export */
+  wgpuTextureDestroy: _wgpuTextureDestroy,
   /** @export */
   wgpuTextureGetFormat: _wgpuTextureGetFormat
 };

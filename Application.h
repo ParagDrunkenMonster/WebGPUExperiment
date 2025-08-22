@@ -17,6 +17,19 @@
 
 #include <utility>
 
+#ifndef SET_WGPU_LABEL
+#ifdef __EMSCRIPTEN__
+#define SET_WGPU_LABEL(desc, txt)                            \
+    WGPUStringView labelView_##desc{};                       \
+    labelView_##desc.data = txt;                             \
+    labelView_##desc.length = strlen(labelView_##desc.data); \
+    (desc).label = labelView_##desc;
+#else
+#define SET_WGPU_LABEL(desc, txt) \
+    (desc).label = txt;
+#endif
+#endif
+
 class Application
 {
 public:
@@ -95,8 +108,10 @@ private:
     uint32_t m_IndexBufferSize;
     WGPUBuffer m_IndexBuffer;
 
-    uint32_t m_UniformBufferSize;
-    uint32_t m_UniformBufferStride;
+    uint32_t m_ConstantUniformBufferSize;
+    uint32_t m_ConstantUniformBufferStride;
+    uint32_t m_DynamicsUniformBufferSize;
+    uint32_t m_DynamicsUniformBufferStride;
     WGPUBuffer m_UniformBuffer;
 
     WGPUTexture m_DepthTexture;

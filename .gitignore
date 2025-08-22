@@ -11,3 +11,5 @@
 /build-web/build.ninja
 /build-web/cmake_install.cmake
 /build-web/webgpu/cmake_install.cmake
+/build-web/libPanduMath.a
+/emrun
