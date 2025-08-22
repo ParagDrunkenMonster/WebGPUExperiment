@@ -57,7 +57,7 @@ private:
     bool CreateIndexBuffer();
     void DestroyBuffer(WGPUBuffer& Buffer);
 
-    std::pair<WGPUSurfaceTexture, WGPUTextureView> GetNextSurfaceViewData();
+    void GetNextSurfaceViewData(std::pair<WGPUSurfaceTexture, WGPUTextureView>& SurfaceViewData);
 
     bool m_IsFullyInitialized;
 
@@ -99,6 +99,8 @@ private:
     uint32_t m_UniformBufferStride;
     WGPUBuffer m_UniformBuffer;
 
+    WGPUTexture m_DepthTexture;
+    WGPUTextureView m_DepthTextureView;
 };
 
 

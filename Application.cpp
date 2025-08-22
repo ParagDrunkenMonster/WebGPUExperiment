@@ -27,7 +27,7 @@ const char* shaderSource = R"(
     @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 
     struct VertexInput {
-        @location(0) position: vec2f,
+        @location(0) position: vec3f,
         @location(1) color: vec3f,
     };
 
@@ -46,7 +46,7 @@ const char* shaderSource = R"(
         // We now move the scene depending on the time!
         var offset = vec2f(uniforms.offset, uniforms.offset);
 
-        out.position = vec4f(in.position.x + offset.x, (in.position.y + offset.y) * ratio, 0.0, 1.0);
+        out.position = vec4f(in.position.x + offset.x, (in.position.y + offset.y) * ratio, in.position.z, 1.0);
         
         let color = in.color * uniforms.color.rgb;
 
@@ -70,19 +70,27 @@ struct alignas(16) UniformBufferData {
 
 
 std::vector<float> vertexData = {
-    // x,   y,     r,   g,   b
-    -0.5, -0.5,   1.0, 0.0, 0.0,
-    +0.5, -0.5,   0.0, 1.0, 0.0,
-    +0.5, +0.5,   0.0, 0.0, 1.0,
-    -0.5, +0.5,   1.0, 1.0, 0.0
+    // x,       y,      z       r,   g,   b
+    // The base
+    - 0.5f, - 0.5f, - 0.3f,    1.0f, 1.0f, 1.0f,
+    + 0.5f, - 0.5f, - 0.3f,    1.0f, 1.0f, 1.0f,
+    + 0.5f, + 0.5f, - 0.3f,    1.0f, 1.0f, 1.0f,
+    - 0.5f, + 0.5f, - 0.3f,    1.0f, 1.0f, 1.0f,
+
+    // And the tip of the pyramid
+    + 0.0f, + 0.0f, + 0.5f,    0.5f, 0.5f, 0.5f
 };
 
 std::vector<uint16_t> indexData = {
-    0, 1, 2, // Triangle #0 connects points #0, #1 and #2
-    0, 2, 3  // Triangle #1 connects points #0, #2 and #3
+    0,  1,  2,
+    0,  2,  3,
+    0,  1,  4,
+    1,  2,  4,
+    2,  3,  4,
+    3,  0,  4,
 };
 
-const uint32_t vertexCount = static_cast<uint32_t>(vertexData.size() / 5);
+const uint32_t vertexCount = static_cast<uint32_t>(vertexData.size() / 6);
 
 namespace
 {
@@ -290,6 +298,8 @@ Application::Application()
     , m_UniformBufferSize(0)
     , m_UniformBufferStride(0)
     , m_UniformBuffer(nullptr)
+    , m_DepthTexture(nullptr)
+    , m_DepthTextureView(nullptr)
 {
 
 }
@@ -487,6 +497,19 @@ void Application::Terminate()
         m_Surface = nullptr;
     }
 
+    if (m_DepthTextureView)
+    {
+        wgpuTextureViewRelease(m_DepthTextureView);
+        m_DepthTextureView = nullptr;
+    }
+
+    if (m_DepthTexture)
+    {
+        wgpuTextureDestroy(m_DepthTexture);
+        wgpuTextureRelease(m_DepthTexture);
+        m_DepthTexture = nullptr;
+    }
+
     if (m_Device)
     {
         wgpuDeviceRelease(m_Device);
@@ -526,8 +549,10 @@ void Application::DestroyBuffer(WGPUBuffer& Buffer)
 
 void Application::MainLoop()
 {
-    // Get the next target texture view
-    auto [surfaceTexture, targetView] = GetNextSurfaceViewData();
+    std::pair<WGPUSurfaceTexture, WGPUTextureView> SurfaceViewData;
+    GetNextSurfaceViewData(SurfaceViewData);
+    auto [surfaceTexture, targetView] = SurfaceViewData;
+
     if (!targetView) return;
 
 #ifndef WEBGPU_BACKEND_WGPU
@@ -549,11 +574,31 @@ void Application::MainLoop()
     renderPassColorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
 #endif // NOT WEBGPU_BACKEND_WGPU
 
+    // We now add a depth/stencil attachment:
+    WGPURenderPassDepthStencilAttachment depthStencilAttachment;
+    // The view of the depth texture
+    depthStencilAttachment.view = m_DepthTextureView;
+
+    // The initial value of the depth buffer, meaning "far"
+    depthStencilAttachment.depthClearValue = 1.0f;
+    // Operation settings comparable to the color attachment
+    depthStencilAttachment.depthLoadOp = WGPULoadOp_Clear;
+    depthStencilAttachment.depthStoreOp = WGPUStoreOp_Store;
+    // we could turn off writing to the depth buffer globally here
+    depthStencilAttachment.depthReadOnly = false;
+
+    // Stencil setup, mandatory but unused
+    depthStencilAttachment.stencilClearValue = 0;
+    depthStencilAttachment.stencilLoadOp = WGPULoadOp_Undefined;
+    depthStencilAttachment.stencilStoreOp = WGPUStoreOp_Undefined;
+    depthStencilAttachment.stencilReadOnly = true;
+    
+    
     WGPURenderPassDescriptor renderPassDesc = {};
     renderPassDesc.nextInChain = nullptr;
     renderPassDesc.colorAttachmentCount = 1;
     renderPassDesc.colorAttachments = &renderPassColorAttachment;
-    renderPassDesc.depthStencilAttachment = nullptr;
+    renderPassDesc.depthStencilAttachment = &depthStencilAttachment;
     renderPassDesc.timestampWrites = nullptr;
 
 
@@ -565,7 +610,7 @@ void Application::MainLoop()
     encoderDesc.label = "My command encoder";
 #endif
 
-    const float Time = glfwGetTime();
+    const float Time = (float)glfwGetTime();
     UniformBufferData Data;
     Data.offset = 0.25f;// glfwGetTime();
     Data.color[0] = std::fmod(Time, 1.0f);
@@ -638,7 +683,7 @@ bool Application::IsRunning()
     return !glfwWindowShouldClose(m_Window);
 }
 
-std::pair<WGPUSurfaceTexture, WGPUTextureView> Application::GetNextSurfaceViewData() 
+void Application::GetNextSurfaceViewData(std::pair<WGPUSurfaceTexture, WGPUTextureView>& SurfaceViewData)
 {
     WGPUSurfaceTexture surfaceTexture;
     wgpuSurfaceGetCurrentTexture(m_Surface, &surfaceTexture);
@@ -649,7 +694,8 @@ std::pair<WGPUSurfaceTexture, WGPUTextureView> Application::GetNextSurfaceViewDa
     if (surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_Success)
 #endif
     {
-        return { surfaceTexture, nullptr };
+        SurfaceViewData ={ surfaceTexture, nullptr };
+        return;
     }
 
     WGPUTextureViewDescriptor viewDescriptor;
@@ -668,7 +714,7 @@ std::pair<WGPUSurfaceTexture, WGPUTextureView> Application::GetNextSurfaceViewDa
     viewDescriptor.aspect = WGPUTextureAspect_All;
     WGPUTextureView targetView = wgpuTextureCreateView(surfaceTexture.texture, &viewDescriptor);
 
-    return { surfaceTexture, targetView };
+    SurfaceViewData ={ surfaceTexture, targetView };
 }
 
 bool Application::GetInstance()
@@ -873,14 +919,6 @@ bool Application::GetFeaturesAndProperties()
     return true;
 }
 
-void setDefaultLimits(WGPULimits& limits) 
-{
-    limits.maxTextureDimension1D = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxTextureDimension2D = WGPU_LIMIT_U32_UNDEFINED;
-    limits.maxTextureDimension3D = WGPU_LIMIT_U32_UNDEFINED;
-    // [...] Set everything to WGPU_LIMIT_U32_UNDEFINED or WGPU_LIMIT_U64_UNDEFINED to mean no limit
-}
-
 bool Application::GetDevice()
 {
     // Creating device
@@ -898,8 +936,6 @@ bool Application::GetDevice()
     //deviceDesc.defaultQueue.label = "The default queue";
 
     WGPULimits requiredLimits{};
-    setDefaultLimits(requiredLimits);
-
     requiredLimits = m_AdopterLimits;
 
     /*// We use at most 1 vertex attribute for now
@@ -954,18 +990,16 @@ bool Application::GetDevice()
     deviceDesc.defaultQueue.label = "The default queue";
 
     WGPURequiredLimits requiredLimits{};
-    setDefaultLimits(requiredLimits.limits);
-
     requiredLimits.limits = m_AdopterLimits;
 
     // We use at most 1 vertex attribute for now
-    requiredLimits.limits.maxVertexAttributes = 1;
+    /*requiredLimits.limits.maxVertexAttributes = 1;
     // We should also tell that we use 1 vertex buffers
     requiredLimits.limits.maxVertexBuffers = 1;
     // Maximum size of a buffer is 6 vertices of 2 float each
     requiredLimits.limits.maxBufferSize = 6 * 2 * sizeof(float);
     // Maximum stride between 2 consecutive vertices in the vertex buffer
-    requiredLimits.limits.maxVertexBufferArrayStride = 2 * sizeof(float);
+    requiredLimits.limits.maxVertexBufferArrayStride = 2 * sizeof(float);*/
 
     deviceDesc.requiredLimits = &requiredLimits; // we do not require any specific limit
 
@@ -1159,8 +1193,58 @@ void setDefault(WGPUBindGroupLayoutEntry& bindingLayout)
     bindingLayout.texture.viewDimension = WGPUTextureViewDimension_Undefined;
 }
 
+void setDefaultDepthStencilFace(WGPUStencilFaceState& stencilFaceState)
+{
+    stencilFaceState.compare = WGPUCompareFunction_Always;
+    stencilFaceState.failOp = WGPUStencilOperation_Keep;
+    stencilFaceState.depthFailOp = WGPUStencilOperation_Keep;
+    stencilFaceState.passOp = WGPUStencilOperation_Keep;
+}
+
 bool Application::CreatePipeline()
 {
+    //setup depth stencil
+    WGPUDepthStencilState depthStencilState;
+    depthStencilState.nextInChain = nullptr;
+    depthStencilState.stencilReadMask = 0;
+    depthStencilState.stencilWriteMask = 0;
+    depthStencilState.depthBias = 0;
+    depthStencilState.depthBiasSlopeScale = 0;
+    depthStencilState.depthBiasClamp = 0;
+    depthStencilState.depthCompare = WGPUCompareFunction_Less;
+    depthStencilState.depthWriteEnabled = true;
+    depthStencilState.format = WGPUTextureFormat_Depth24Plus;
+    setDefaultDepthStencilFace(depthStencilState.stencilFront);
+    setDefaultDepthStencilFace(depthStencilState.stencilBack);
+
+    // Create the depth texture
+    WGPUTextureDescriptor depthTextureDesc;
+    depthTextureDesc.nextInChain = nullptr;
+    depthTextureDesc.label = "Depth Texture";
+    depthTextureDesc.dimension = WGPUTextureDimension_2D;
+    depthTextureDesc.format = depthStencilState.format;
+    depthTextureDesc.mipLevelCount = 1;
+    depthTextureDesc.sampleCount = 1;
+    depthTextureDesc.size = { 640, 480, 1 };
+    depthTextureDesc.usage = WGPUTextureUsage_RenderAttachment;
+    depthTextureDesc.viewFormatCount = 1;
+    depthTextureDesc.viewFormats = &depthStencilState.format;
+    m_DepthTexture = wgpuDeviceCreateTexture(m_Device, &depthTextureDesc);
+
+    // Create the view of the depth texture manipulated by the rasterizer
+    WGPUTextureViewDescriptor depthTextureViewDesc;
+    depthTextureViewDesc.nextInChain = nullptr;
+    depthTextureViewDesc.label = "Depth texture view";
+    depthTextureViewDesc.aspect = WGPUTextureAspect_DepthOnly;
+    depthTextureViewDesc.baseArrayLayer = 0;
+    depthTextureViewDesc.arrayLayerCount = 1;
+    depthTextureViewDesc.baseMipLevel = 0;
+    depthTextureViewDesc.mipLevelCount = 1;
+    depthTextureViewDesc.dimension = WGPUTextureViewDimension_2D;
+    depthTextureViewDesc.format = depthStencilState.format;
+    m_DepthTextureView = wgpuTextureCreateView(m_DepthTexture, &depthTextureViewDesc);
+
+    
     // The buffer will only contain 1 float with the value of uTime
     // then 3 floats left empty but needed by alignment constraints
     m_UniformBufferStride = ceilToNextMultiple((uint32_t)sizeof(UniformBufferData), (uint32_t)m_DeviceLimits.minUniformBufferOffsetAlignment);
@@ -1205,15 +1289,15 @@ bool Application::CreatePipeline()
 
     // Vertex fetch
     std::vector<WGPUVertexAttribute> vertexAttribs(2);
-    vertexAttribs[0].format = WGPUVertexFormat::WGPUVertexFormat_Float32x2;;
+    vertexAttribs[0].format = WGPUVertexFormat::WGPUVertexFormat_Float32x3;;
     vertexAttribs[0].offset = 0;
     vertexAttribs[0].shaderLocation = 0;
 
     vertexAttribs[1].format = WGPUVertexFormat::WGPUVertexFormat_Float32x3;;
-    vertexAttribs[1].offset = 2 * sizeof(float); // starts after x, y position
+    vertexAttribs[1].offset = 3 * sizeof(float); // starts after x, y, z position
     vertexAttribs[1].shaderLocation = 1;
 
-    const uint32_t StrideSize = 5 * sizeof(float);
+    const uint32_t StrideSize = 6 * sizeof(float);
     m_VertexBufferLayout.arrayStride = StrideSize;
     m_VertexBufferLayout.stepMode = WGPUVertexStepMode::WGPUVertexStepMode_Vertex;
     m_VertexBufferLayout.attributeCount = static_cast<uint32_t>(vertexAttribs.size());
@@ -1301,11 +1385,12 @@ bool Application::CreatePipeline()
     pipelineDesc.layout = m_PipelineLayout;
     pipelineDesc.vertex = vertex;
     pipelineDesc.primitive = primitive;
-    pipelineDesc.depthStencil = nullptr;
+    pipelineDesc.depthStencil = &depthStencilState;
     pipelineDesc.multisample = multisample;
     pipelineDesc.fragment = &fragment;
 
     m_Pipeline = wgpuDeviceCreateRenderPipeline(m_Device, &pipelineDesc);
+
 
     return m_Pipeline != nullptr;
 }

@@ -19,6 +19,17 @@ endif()
 add_subdirectory(webgpu)
 add_subdirectory(glfw3webgpu)
 
+# Collect all .cpp and .h files in Math/
+file(GLOB MATH_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/PanduMath/*.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/PanduMath/*.h
+)
+
+# Create the library
+add_library(PanduMath ${MATH_SOURCES})
+
+target_include_directories(PanduMath PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/PanduMath)
+
 # Main executable
 add_executable(App main.cpp Application.h Application.cpp)
 
@@ -36,7 +47,7 @@ else()
     target_compile_options(App PRIVATE -Wall -Wextra -pedantic)
 endif()
 
-target_link_libraries(App PRIVATE webgpu glfw glfw3webgpu)
+target_link_libraries(App PRIVATE webgpu glfw glfw3webgpu PanduMath)
 
 # Copy WebGPU runtime binaries for native builds
 if (NOT EMSCRIPTEN)
