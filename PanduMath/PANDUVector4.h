@@ -10,6 +10,7 @@
 
 #include <cmath>
 #include <limits>
+#include "PANDUVector3.h"
 #include "PANDUMathConstants.h"
 
 namespace Pandu
@@ -39,6 +40,14 @@ namespace Pandu
 			, y(_src.y)
 			, z(_src.z)
 			, w(_src.w)
+		{
+		}
+
+		inline explicit Vector4(const Vector3& _src)
+			: x(_src.x)
+			, y(_src.y)
+			, z(_src.z)
+			, w(1.0f)
 		{
 		}
 

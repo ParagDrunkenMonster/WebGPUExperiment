@@ -26,15 +26,19 @@ const char* shaderSource = R"(
         viewMatrix          : mat4x4<f32>,
         invProjectionMatrix : mat4x4<f32>,
         invViewMatrix       : mat4x4<f32>,
-        totalTime : f32,
-        deltaTime : f32,
+        ambientLightColor   : vec4<f32>,
+        light1Direction     : vec4<f32>,
+        light1Color         : vec4<f32>,
+        totalTime           : f32,
+        deltaTime           : f32,
         // pad to 16B if needed
     };
 
     struct DynamicUniforms {
-        modelMatrix    : mat4x4<f32>,
-        invModelMatrix : mat4x4<f32>,
-        color          : vec4<f32>,
+        modelMatrix     : mat4x4<f32>,
+        invModelMatrix  : mat4x4<f32>,
+        normalMatrix    : mat4x4<f32>,
+        color           : vec4<f32>,
     };
 
     @group(0) @binding(0) var<uniform> constUniforms : ConstantUniforms;
@@ -43,12 +47,14 @@ const char* shaderSource = R"(
 
     struct VertexInput {
         @location(0) position: vec3f,
-        @location(1) color: vec3f,
+        @location(1) normal: vec3f,
+        @location(2) color: vec3f,
     };
 
     struct VertexOutput {
         @builtin(position) position: vec4f,
-        @location(0) color: vec3f,
+        @location(0) normal: vec3f,
+        @location(1) color: vec3f,
     };
 
     @vertex
@@ -57,17 +63,29 @@ const char* shaderSource = R"(
         var out: VertexOutput; // create the output struct
 
         out.position = constUniforms.projectionMatrix * constUniforms.viewMatrix * dynUniforms.modelMatrix * vec4f(in.position, 1.0);
-        let color = in.color * dynUniforms.color.rgb;
+        out.color = in.color * dynUniforms.color.rgb;
 
-        // Gamma-correction
-        out.color = pow(color, vec3f(2.2));
+        out.normal = normalize((dynUniforms.normalMatrix * vec4f(in.normal, 0.0)).xyz);
 
         return out;
     }
 
     @fragment
     fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-        return vec4f(in.color, 1.0); // use the interpolated color coming from the vertex shader
+        
+        let N = normalize(in.normal);
+        let L = normalize(constUniforms.light1Direction.xyz);
+        let diff = max(dot(N, L), 0.0);
+
+        let diffuse = diff * in.color.rgb * constUniforms.light1Color.rgb;
+        let ambient = constUniforms.ambientLightColor.rgb * in.color.rgb;
+
+        var finalColor = ambient + diffuse;
+        
+        // Gamma correction at the very end (if not using sRGB framebuffer)
+        finalColor = pow(finalColor, vec3f(1.0 / 2.2));
+
+        return vec4f(finalColor, 1.0);
     }
 )";
 
@@ -77,6 +95,9 @@ struct alignas(16) ConstantUniforms
     std::array<float, 16> viewMatrix;
     std::array<float, 16> invProjectionMatrix;
     std::array<float, 16> invViewMatrix;
+    std::array<float, 4> ambientLightColor;
+    std::array<float, 4> light1Direction;
+    std::array<float, 4> light1Color;
     float totalTime;
     float pad[3];
     float deltaTime;
@@ -87,39 +108,59 @@ struct alignas(16) DynamicUniforms
 {
     std::array<float, 16> modelMatrix;
     std::array<float, 16> invModelMatrix;
+    std::array<float, 16> normalMatrix;
     std::array<float, 4> color;
 };
 
 
 
 std::vector<float> vertexData = {
-    // x,       y,      z       r,   g,   b
-    // The base
-    - 0.5f, - 0.5f, - 0.3f,    1.0f, 1.0f, 1.0f,
-    + 0.5f, - 0.5f, - 0.3f,    1.0f, 1.0f, 1.0f,
-    + 0.5f, + 0.5f, - 0.3f,    1.0f, 1.0f, 1.0f,
-    - 0.5f, + 0.5f, - 0.3f,    1.0f, 1.0f, 1.0f,
+    // x    y    z       nx   ny  nz     r   g   b
 
-    // And the tip of the pyramid
-    + 0.0f, + 0.0f, + 0.5f,    0.5f, 0.5f, 0.5f
+// The base
+- 0.5f, - 0.5f, - 0.3f,     0.0f, - 1.0f, 0.0f,    1.0f, 1.0f, 1.0f,
++ 0.5f, - 0.5f, - 0.3f,     0.0f, - 1.0f, 0.0f,    1.0f, 1.0f, 1.0f,
++ 0.5f, + 0.5f, - 0.3f,     0.0f, - 1.0f, 0.0f,    1.0f, 1.0f, 1.0f,
+- 0.5f, + 0.5f, - 0.3f,     0.0f, - 1.0f, 0.0f,    1.0f, 1.0f, 1.0f,
+
+// Face sides have their own copy of the vertices
+// because they have a different normal vector.
+- 0.5f, -0.5f, -0.3f,  0.0f, -0.848f, 0.53f,    1.0f, 1.0f, 1.0f,
++0.5f, -0.5f, -0.3f,  0.0f, -0.848f, 0.53f,    1.0f, 1.0f, 1.0f,
++0.0f, +0.0f, +0.5f,  0.0f, -0.848f, 0.53f,    1.0f, 1.0f, 1.0f,
+
++ 0.5f, -0.5f, -0.3f,   0.848f, 0.0f, 0.53f,    1.0f, 1.0f, 1.0f,
++0.5f, +0.5f, -0.3f,   0.848f, 0.0f, 0.53f,    1.0f, 1.0f, 1.0f,
++0.0f, +0.0f, +0.5f,   0.848f, 0.0f, 0.53f,    1.0f, 1.0f, 1.0f,
+
++ 0.5f, +0.5f, -0.3f,   0.0f, 0.848f, 0.53f,    1.0f, 1.0f, 1.0f,
+-0.5f, +0.5f, -0.3f,   0.0f, 0.848f, 0.53f,    1.0f, 1.0f, 1.0f,
++0.0f, +0.0f, +0.5f,   0.0f, 0.848f, 0.53f,    1.0f, 1.0f, 1.0f,
+
+- 0.5f, +0.5f, -0.3f, -0.848f, 0.0f, 0.53f,    1.0f, 1.0f, 1.0f,
+-0.5f, -0.5f, -0.3f, -0.848f, 0.0f, 0.53f,    1.0f, 1.0f, 1.0f,
++0.0f, +0.0f, +0.5f, -0.848f, 0.0f, 0.53f,    1.0f, 1.0f, 1.0f
 };
 
 std::vector<uint16_t> indexData = {
-    0,  1,  2,
-    0,  2,  3,
-    0,  1,  4,
-    1,  2,  4,
-    2,  3,  4,
-    3,  0,  4,
+ 0,  1,  2,
+ 0,  2,  3,
+
+ 4,  5,  6,
+ 7,  8,  9,
+10, 11, 12,
+13, 14, 15
 };
 
-const uint32_t vertexCount = static_cast<uint32_t>(vertexData.size() / 6);
+const uint32_t vertexCount = static_cast<uint32_t>(vertexData.size() / 9);
 
 const uint32_t maxDrawCallsPerFrameSupported = 1024;
 
 namespace
 {
-    void FillConstantUniform(ConstantUniforms& OutUniform, const Pandu::Matrix44& Projection, const Pandu::Matrix44& View, float TotalTime, float DeltaTime)
+    void FillConstantUniform(ConstantUniforms& OutUniform, const Pandu::Matrix44& Projection, const Pandu::Matrix44& View
+        , const Pandu::Vector4& ambientLightColor, const Pandu::Vector3& light1Direction, const Pandu::Vector4& light1Color
+        , float TotalTime, float DeltaTime)
     {
         Pandu::Matrix44 InvProjection = Projection.GetInverse(), InvView = View.GetInverse();
 
@@ -132,16 +173,29 @@ namespace
         Utils::GetWebGPUMatrix(OutUniform.invProjectionMatrix, InvProjection);
         Utils::GetWebGPUMatrix(OutUniform.invViewMatrix, InvView);
 
+        const Pandu::Vector4 InvLight1Dir = (Pandu::Vector4)(-light1Direction);
+
+        std::copy(&ambientLightColor.Data()[0], (&ambientLightColor.Data()[0]) + 4, OutUniform.ambientLightColor.begin());
+        std::copy(&InvLight1Dir.Data()[0], (&InvLight1Dir.Data()[0]) + 4, OutUniform.light1Direction.begin());
+        std::copy(&light1Color.Data()[0], (&light1Color.Data()[0]) + 4, OutUniform.light1Color.begin());
+
         OutUniform.totalTime = TotalTime;
         OutUniform.deltaTime = DeltaTime;
     }
 
     void FillDynamicUniform(DynamicUniforms& OutUniform, const Pandu::Matrix44& Model, const Pandu::Vector4& Color)
     {
-        Pandu::Matrix44 InvModel = Model.GetInverse();
+        const Pandu::Matrix44 InvModel = Model.GetInverse();
+        Pandu::Matrix44 NormalMatrix = InvModel.GetTranspose();
+        
+                                                                                                                    NormalMatrix[0][3] = 0.0f;
+                                                                                                                    NormalMatrix[1][3] = 0.0f;
+                                                                                                                    NormalMatrix[2][3] = 0.0f;
+        NormalMatrix[3][0] = 0.0f;			NormalMatrix[3][1] = 0.0f;			NormalMatrix[3][2] = 0.0f;			NormalMatrix[3][3] = 1.0f;
 
         Utils::GetWebGPUMatrix(OutUniform.modelMatrix, Model);
         Utils::GetWebGPUMatrix(OutUniform.invModelMatrix, InvModel);
+        Utils::GetWebGPUMatrix(OutUniform.normalMatrix, NormalMatrix);
 
         std::copy(&Color.Data()[0], (&Color.Data()[0]) + 4, OutUniform.color.begin());
     }
@@ -612,9 +666,9 @@ void Application::MainLoop()
     if (!targetView) return;
 
     Pandu::Matrix44 CameraTransform = Pandu::Matrix44::IDENTITY;
-    CameraTransform.SetTranslate(Pandu::Vector3(0.0f, 0.0f, 1.0f));
+    CameraTransform.SetTranslate(Pandu::Vector3(0.0f, 0.0f, 0.25f));
 
-    const Pandu::Matrix44 ProjectionMatrix = Utils::GetProjectionMatrix(Utils::Radians(90.0f), (float)m_ScreenWidth / (float)m_ScreenHeight, 1.0f, 10000.0f);
+    const Pandu::Matrix44 ProjectionMatrix = Utils::GetProjectionMatrix(Utils::Radians(60.0f), (float)m_ScreenWidth / (float)m_ScreenHeight, 0.01f, 100.0f);
     const Pandu::Matrix44 ViewMatrix = CameraTransform.GetInverse();
     
 
@@ -670,11 +724,15 @@ void Application::MainLoop()
 
     SET_WGPU_LABEL(encoderDesc, "My command encoder");
 
+    static float PreviousTime = 0.0f;
     const float Time = (float)glfwGetTime();
-    static float TotalTime = 0;
+    const float DeltaTime = Time - PreviousTime;
+
+    Pandu::Vector3 LightDirection(-1.0f, 0.0f, -1.0f);
+    LightDirection.Normalize();
 
     ConstantUniforms ConstData;
-    FillConstantUniform(ConstData, ProjectionMatrix, ViewMatrix, TotalTime, Time);
+    FillConstantUniform(ConstData, ProjectionMatrix, ViewMatrix, Pandu::Vector4(0.1f, 0.1f, 0.1f, 1.0f), LightDirection, Pandu::Vector4::UNIT, Time, DeltaTime);
     wgpuQueueWriteBuffer(m_Queue, m_UniformBuffer, 0, &ConstData, sizeof(ConstantUniforms));
 
     int ObjIndex = 0;
@@ -1296,7 +1354,7 @@ bool Application::CreatePipeline()
 
     // --- Per frame constant buffer (binding = 0) ---
     BindingLayout[0].binding = 0;
-    BindingLayout[0].visibility = WGPUShaderStage_Vertex;
+    BindingLayout[0].visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
     BindingLayout[0].buffer.type = WGPUBufferBindingType_Uniform;
     BindingLayout[0].buffer.hasDynamicOffset = false;
     BindingLayout[0].buffer.minBindingSize = sizeof(ConstantUniforms);
@@ -1331,7 +1389,7 @@ bool Application::CreatePipeline()
 
 
     // Vertex fetch
-    std::vector<WGPUVertexAttribute> vertexAttribs(2);
+    std::vector<WGPUVertexAttribute> vertexAttribs(3);
     vertexAttribs[0].format = WGPUVertexFormat::WGPUVertexFormat_Float32x3;;
     vertexAttribs[0].offset = 0;
     vertexAttribs[0].shaderLocation = 0;
@@ -1340,7 +1398,11 @@ bool Application::CreatePipeline()
     vertexAttribs[1].offset = 3 * sizeof(float); // starts after x, y, z position
     vertexAttribs[1].shaderLocation = 1;
 
-    const uint32_t StrideSize = 6 * sizeof(float);
+    vertexAttribs[2].format = WGPUVertexFormat::WGPUVertexFormat_Float32x3;;
+    vertexAttribs[2].offset = 6 * sizeof(float); // starts after x, y, z position and x, y, z normal
+    vertexAttribs[2].shaderLocation = 2;
+
+    const uint32_t StrideSize = 9 * sizeof(float);
     m_VertexBufferLayout.arrayStride = StrideSize;
     m_VertexBufferLayout.stepMode = WGPUVertexStepMode::WGPUVertexStepMode_Vertex;
     m_VertexBufferLayout.attributeCount = static_cast<uint32_t>(vertexAttribs.size());
@@ -1540,8 +1602,11 @@ bool Application::CreateUniformBuffer()
 
     m_UniformBuffer = wgpuDeviceCreateBuffer(m_Device, &uniformBufferDesc);
 
+    Pandu::Vector3 LightDirection(-1.0f, 0.0f, -1.0f);
+    LightDirection.Normalize();
+
     ConstantUniforms ConstData;
-    FillConstantUniform(ConstData, Pandu::Matrix44::IDENTITY, Pandu::Matrix44::IDENTITY, 0.0f, 0.0f);
+    FillConstantUniform(ConstData, Pandu::Matrix44::IDENTITY, Pandu::Matrix44::IDENTITY, Pandu::Vector4(0.1f, 0.1f, 0.1f, 1.0f), LightDirection, Pandu::Vector4::UNIT, 0, 0);
     wgpuQueueWriteBuffer(m_Queue, m_UniformBuffer, 0, &ConstData, sizeof(ConstantUniforms));
 
     DynamicUniforms DynData;
