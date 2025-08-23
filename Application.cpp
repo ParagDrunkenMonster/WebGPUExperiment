@@ -8,6 +8,7 @@
 #include <array>
 #include <PANDUMatrix44.h>
 #include <PANDUVector4.h>
+#include "Utils.h"
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -54,10 +55,8 @@ const char* shaderSource = R"(
     fn vs_main(in: VertexInput) -> VertexOutput {
         
         var out: VertexOutput; // create the output struct
-        
-        let ratio = 640.0 / 480.0;
 
-        out.position = dynUniforms.modelMatrix * vec4f(in.position, 1.0);
+        out.position = constUniforms.projectionMatrix * constUniforms.viewMatrix * dynUniforms.modelMatrix * vec4f(in.position, 1.0);
         let color = in.color * dynUniforms.color.rgb;
 
         // Gamma-correction
@@ -124,11 +123,14 @@ namespace
     {
         Pandu::Matrix44 InvProjection = Projection.GetInverse(), InvView = View.GetInverse();
 
-        std::copy(&Projection.m[0][0], (&Projection.m[0][0]) + 16, OutUniform.projectionMatrix.begin());
-        std::copy(&View.m[0][0], (&View.m[0][0]) + 16, OutUniform.viewMatrix.begin());
+        // WGSL expects matrices to be column - major by default.
+        // Pandu::Matrix44 is stored row - major(most C++ math libs are), we need to transpose before uploading.
+        // Otherwise, the matrix math will be wrong even if the order is fixed.
 
-        std::copy(&InvProjection.m[0][0], (&InvProjection.m[0][0]) + 16, OutUniform.invProjectionMatrix.begin());
-        std::copy(&InvView.m[0][0], (&InvView.m[0][0]) + 16, OutUniform.invViewMatrix.begin());
+        Utils::GetWebGPUMatrix(OutUniform.projectionMatrix, Projection);
+        Utils::GetWebGPUMatrix(OutUniform.viewMatrix, View);
+        Utils::GetWebGPUMatrix(OutUniform.invProjectionMatrix, InvProjection);
+        Utils::GetWebGPUMatrix(OutUniform.invViewMatrix, InvView);
 
         OutUniform.totalTime = TotalTime;
         OutUniform.deltaTime = DeltaTime;
@@ -138,8 +140,8 @@ namespace
     {
         Pandu::Matrix44 InvModel = Model.GetInverse();
 
-        std::copy(&Model.m[0][0], (&Model.m[0][0]) + 16, OutUniform.modelMatrix.begin());
-        std::copy(&InvModel.m[0][0], (&InvModel.m[0][0]) + 16, OutUniform.invModelMatrix.begin());
+        Utils::GetWebGPUMatrix(OutUniform.modelMatrix, Model);
+        Utils::GetWebGPUMatrix(OutUniform.invModelMatrix, InvModel);
 
         std::copy(&Color.Data()[0], (&Color.Data()[0]) + 4, OutUniform.color.begin());
     }
@@ -331,6 +333,8 @@ namespace
 
 Application::Application()
     : m_IsFullyInitialized(false)
+    , m_ScreenWidth(640)
+    , m_ScreenHeight(480)
     , m_Window(nullptr)
     , m_Instance(nullptr)
     , m_Surface(nullptr)
@@ -373,7 +377,7 @@ bool Application::Initialize()
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
     // Create the window
-    m_Window = glfwCreateWindow(640, 480, "Learn WebGPU", nullptr, nullptr);
+    m_Window = glfwCreateWindow(m_ScreenWidth, m_ScreenHeight, "Learn WebGPU", nullptr, nullptr);
 
     if (!m_Window) 
     {
@@ -607,6 +611,13 @@ void Application::MainLoop()
 
     if (!targetView) return;
 
+    Pandu::Matrix44 CameraTransform = Pandu::Matrix44::IDENTITY;
+    CameraTransform.SetTranslate(Pandu::Vector3(0.0f, 0.0f, 1.0f));
+
+    const Pandu::Matrix44 ProjectionMatrix = Utils::GetProjectionMatrix(Utils::Radians(90.0f), (float)m_ScreenWidth / (float)m_ScreenHeight, 1.0f, 10000.0f);
+    const Pandu::Matrix44 ViewMatrix = CameraTransform.GetInverse();
+    
+
 #ifndef WEBGPU_BACKEND_WGPU
     // We no longer need the texture, only its view
     // (NB: with wgpu-native, surface textures must be release after the call to wgpuSurfacePresent)
@@ -663,19 +674,19 @@ void Application::MainLoop()
     static float TotalTime = 0;
 
     ConstantUniforms ConstData;
-    FillConstantUniform(ConstData, Pandu::Matrix44::IDENTITY, Pandu::Matrix44::IDENTITY, TotalTime, Time);
+    FillConstantUniform(ConstData, ProjectionMatrix, ViewMatrix, TotalTime, Time);
     wgpuQueueWriteBuffer(m_Queue, m_UniformBuffer, 0, &ConstData, sizeof(ConstantUniforms));
 
     int ObjIndex = 0;
     Pandu::Matrix44 Translate0 = Pandu::Matrix44::IDENTITY;
-    Translate0.SetTranslate(Pandu::Vector3(-0.5f, -0.5f, -0.25f));
+    Translate0.SetTranslate(Pandu::Vector3(-0.5f, -0.5f, -2.25f));
     DynamicUniforms DynData;
     FillDynamicUniform(DynData, Translate0, Pandu::Vector4::UNIT);
     wgpuQueueWriteBuffer(m_Queue, m_UniformBuffer, m_ConstantUniformBufferStride + m_DynamicsUniformBufferStride * ObjIndex, &DynData, sizeof(DynamicUniforms));
 
     // for second object
     Pandu::Matrix44 Translate1 = Pandu::Matrix44::IDENTITY;
-    Translate1.SetTranslate(Pandu::Vector3(0.5f, 0.5f, -0.25f));
+    Translate1.SetTranslate(Pandu::Vector3(0.5f, 0.5f, -2.25f));
     ObjIndex++;
     DynamicUniforms DynData1;
     FillDynamicUniform(DynData1, Translate1, Pandu::Vector4::UNIT);
@@ -842,8 +853,8 @@ bool Application::GetSurface()
     
     WGPUSurfaceConfiguration config = {};
     config.nextInChain = nullptr;
-    config.width = 640;
-    config.height = 480;
+    config.width = m_ScreenWidth;
+    config.height = m_ScreenHeight;
     config.format = capabilities.formats[0];
     // And we do not need any particular view format:
     config.viewFormatCount = 0;
@@ -1253,7 +1264,7 @@ bool Application::CreatePipeline()
     depthTextureDesc.format = depthStencilState.format;
     depthTextureDesc.mipLevelCount = 1;
     depthTextureDesc.sampleCount = 1;
-    depthTextureDesc.size = { 640, 480, 1 };
+    depthTextureDesc.size = { m_ScreenWidth, m_ScreenHeight, 1 };
     depthTextureDesc.usage = WGPUTextureUsage_RenderAttachment;
     depthTextureDesc.viewFormatCount = 1;
     depthTextureDesc.viewFormats = &depthStencilState.format;

@@ -74,6 +74,9 @@ private:
 
     bool m_IsFullyInitialized;
 
+    uint32_t m_ScreenWidth;
+    uint32_t m_ScreenHeight;
+
     WGPULimits m_AdopterLimits;
     WGPULimits m_DeviceLimits;
 

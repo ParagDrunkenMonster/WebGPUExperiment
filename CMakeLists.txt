@@ -31,7 +31,7 @@ add_library(PanduMath ${MATH_SOURCES})
 target_include_directories(PanduMath PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/PanduMath)
 
 # Main executable
-add_executable(App main.cpp Application.h Application.cpp)
+add_executable(App main.cpp Utils.h Application.h Application.cpp)
 
 # Compiler settings
 target_compile_features(App PRIVATE cxx_std_17)
