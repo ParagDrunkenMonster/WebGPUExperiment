@@ -333,8 +333,8 @@ namespace
 
 Application::Application()
     : m_IsFullyInitialized(false)
-    , m_ScreenWidth(640)
-    , m_ScreenHeight(480)
+    , m_ScreenWidth(1024)
+    , m_ScreenHeight(768)
     , m_Window(nullptr)
     , m_Instance(nullptr)
     , m_Surface(nullptr)
