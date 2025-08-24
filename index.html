@@ -23,9 +23,7 @@
 <body>
 	<canvas id="canvas"></canvas>
 	<script type="text/javascript">
-		const objPath = "Content/smooth_vase.obj";
-		Module.ccall('loadObj', 'void', ['string', 'string'], [objPath]);
-		  
+		const objPath = "Content/smooth_vase.obj";  
 		// Emscripten expects a Module object
 		var Module = {
 			canvas: (function () {
