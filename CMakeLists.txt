@@ -30,8 +30,12 @@ add_library(PanduMath ${MATH_SOURCES})
 
 target_include_directories(PanduMath PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/PanduMath)
 
+if (CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -s FETCH=1")
+endif()
+
 # Main executable
-add_executable(App main.cpp Utils.h Application.h Application.cpp)
+add_executable(App main.cpp tiny_obj_loader.h Utils.h ObjModelLoader.h ObjModelLoader.cpp Application.h Application.cpp)
 
 # Compiler settings
 target_compile_features(App PRIVATE cxx_std_17)

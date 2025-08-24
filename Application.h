@@ -15,7 +15,11 @@
 #include <webgpu/webgpu.h>
 #endif
 
+#include <list>
 #include <utility>
+#include <PANDUMatrix44.h>
+#include <PANDUVector4.h>
+#include "ObjModelLoader.h"
 
 #ifndef SET_WGPU_LABEL
 #ifdef __EMSCRIPTEN__
@@ -57,6 +61,18 @@ public:
 
 private:
 
+    struct RenderBuffer
+    {
+        uint32_t VertexBufferSize;
+        WGPUBuffer VertexBuffer;
+
+        uint32_t IndexBufferSize;
+        uint32_t IndicesCount;
+        WGPUBuffer IndexBuffer;
+
+        Pandu::Matrix44 ObjectTransform;
+    };
+
     bool GetInstance();
     bool GetSurface();
     bool GetAdapter();
@@ -66,11 +82,15 @@ private:
     bool LoadShaders();
     bool CreatePipeline();
     bool CreateUniformBuffer();
-    bool CreateVertexBuffer();
-    bool CreateIndexBuffer();
+    bool CreateVertexBuffer(uint32_t& OutBufferSize, WGPUBuffer& OutVertexBuffer, const std::vector<float>& VertexBufferData) const;
+    bool CreateIndexBuffer(uint32_t& OutIndexBufferSize, uint32_t& OutIndicesCount, WGPUBuffer& OutIndexBuffer, const std::vector<uint32_t>& Indices) const;
     void DestroyBuffer(WGPUBuffer& Buffer);
 
     void GetNextSurfaceViewData(std::pair<WGPUSurfaceTexture, WGPUTextureView>& SurfaceViewData);
+
+    void CheckLoadingObjects();
+    void LoadRenderModel(const ObjModelLoader::ModelData* Data);
+    void RenderRenderObject(uint32_t& InOutBufferOffsetIndex, WGPURenderPassEncoder renderPass);
 
     bool m_IsFullyInitialized;
 
@@ -105,12 +125,6 @@ private:
 
     WGPUVertexBufferLayout m_VertexBufferLayout;
 
-    uint32_t m_VertexBufferSize;
-    WGPUBuffer m_Buffer1;
-
-    uint32_t m_IndexBufferSize;
-    WGPUBuffer m_IndexBuffer;
-
     uint32_t m_ConstantUniformBufferSize;
     uint32_t m_ConstantUniformBufferStride;
     uint32_t m_DynamicsUniformBufferSize;
@@ -119,6 +133,13 @@ private:
 
     WGPUTexture m_DepthTexture;
     WGPUTextureView m_DepthTextureView;
+
+    std::list<std::future<std::unique_ptr<const ObjModelLoader::ModelData>>> m_LoadingModels;
+
+    std::vector<RenderBuffer> m_RenderObjects;
+
+    Pandu::Matrix44 m_CameraMatrix;
+    Pandu::Matrix44 m_ObjModelTransform;
 };
 
 

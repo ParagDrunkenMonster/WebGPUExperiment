@@ -6,9 +6,9 @@
 #include <cassert>
 #include <vector>
 #include <array>
-#include <PANDUMatrix44.h>
-#include <PANDUVector4.h>
 #include "Utils.h"
+#include <PANDUVector2.h>
+#include <PANDUQuaternion.h>
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -49,6 +49,7 @@ const char* shaderSource = R"(
         @location(0) position: vec3f,
         @location(1) normal: vec3f,
         @location(2) color: vec3f,
+        @location(3) uv: vec2f,
     };
 
     struct VertexOutput {
@@ -115,34 +116,34 @@ struct alignas(16) DynamicUniforms
 
 
 std::vector<float> vertexData = {
-    // x    y    z       nx   ny  nz     r   g   b
+    // x    y    z       nx   ny  nz     r   g   b                      u   v
 
 // The base
-- 0.5f, - 0.5f, - 0.3f,     0.0f, - 1.0f, 0.0f,    1.0f, 1.0f, 1.0f,
-+ 0.5f, - 0.5f, - 0.3f,     0.0f, - 1.0f, 0.0f,    1.0f, 1.0f, 1.0f,
-+ 0.5f, + 0.5f, - 0.3f,     0.0f, - 1.0f, 0.0f,    1.0f, 1.0f, 1.0f,
-- 0.5f, + 0.5f, - 0.3f,     0.0f, - 1.0f, 0.0f,    1.0f, 1.0f, 1.0f,
+- 0.5f, - 0.5f, - 0.3f,     0.0f, - 1.0f, 0.0f,    1.0f, 1.0f, 1.0f,    1.0f, 1.0f,
++ 0.5f, - 0.5f, - 0.3f,     0.0f, - 1.0f, 0.0f,    1.0f, 1.0f, 1.0f,    1.0f, 1.0f,
++ 0.5f, + 0.5f, - 0.3f,     0.0f, - 1.0f, 0.0f,    1.0f, 1.0f, 1.0f,    1.0f, 1.0f,
+- 0.5f, + 0.5f, - 0.3f,     0.0f, - 1.0f, 0.0f,    1.0f, 1.0f, 1.0f,    1.0f, 1.0f,
 
 // Face sides have their own copy of the vertices
 // because they have a different normal vector.
-- 0.5f, -0.5f, -0.3f,  0.0f, -0.848f, 0.53f,    1.0f, 1.0f, 1.0f,
-+0.5f, -0.5f, -0.3f,  0.0f, -0.848f, 0.53f,    1.0f, 1.0f, 1.0f,
-+0.0f, +0.0f, +0.5f,  0.0f, -0.848f, 0.53f,    1.0f, 1.0f, 1.0f,
+- 0.5f, -0.5f, -0.3f,  0.0f, -0.848f, 0.53f,    1.0f, 1.0f, 1.0f,    1.0f, 1.0f,
++0.5f, -0.5f, -0.3f,  0.0f, -0.848f, 0.53f,    1.0f, 1.0f, 1.0f,    1.0f, 1.0f,
++0.0f, +0.0f, +0.5f,  0.0f, -0.848f, 0.53f,    1.0f, 1.0f, 1.0f,    1.0f, 1.0f,
 
-+ 0.5f, -0.5f, -0.3f,   0.848f, 0.0f, 0.53f,    1.0f, 1.0f, 1.0f,
-+0.5f, +0.5f, -0.3f,   0.848f, 0.0f, 0.53f,    1.0f, 1.0f, 1.0f,
-+0.0f, +0.0f, +0.5f,   0.848f, 0.0f, 0.53f,    1.0f, 1.0f, 1.0f,
++ 0.5f, -0.5f, -0.3f,   0.848f, 0.0f, 0.53f,    1.0f, 1.0f, 1.0f,    1.0f, 1.0f,
++0.5f, +0.5f, -0.3f,   0.848f, 0.0f, 0.53f,    1.0f, 1.0f, 1.0f,    1.0f, 1.0f,
++0.0f, +0.0f, +0.5f,   0.848f, 0.0f, 0.53f,    1.0f, 1.0f, 1.0f,    1.0f, 1.0f,
 
-+ 0.5f, +0.5f, -0.3f,   0.0f, 0.848f, 0.53f,    1.0f, 1.0f, 1.0f,
--0.5f, +0.5f, -0.3f,   0.0f, 0.848f, 0.53f,    1.0f, 1.0f, 1.0f,
-+0.0f, +0.0f, +0.5f,   0.0f, 0.848f, 0.53f,    1.0f, 1.0f, 1.0f,
++ 0.5f, +0.5f, -0.3f,   0.0f, 0.848f, 0.53f,    1.0f, 1.0f, 1.0f,    1.0f, 1.0f,
+-0.5f, +0.5f, -0.3f,   0.0f, 0.848f, 0.53f,    1.0f, 1.0f, 1.0f,    1.0f, 1.0f,
++0.0f, +0.0f, +0.5f,   0.0f, 0.848f, 0.53f,    1.0f, 1.0f, 1.0f,    1.0f, 1.0f,
 
-- 0.5f, +0.5f, -0.3f, -0.848f, 0.0f, 0.53f,    1.0f, 1.0f, 1.0f,
--0.5f, -0.5f, -0.3f, -0.848f, 0.0f, 0.53f,    1.0f, 1.0f, 1.0f,
-+0.0f, +0.0f, +0.5f, -0.848f, 0.0f, 0.53f,    1.0f, 1.0f, 1.0f
+- 0.5f, +0.5f, -0.3f, -0.848f, 0.0f, 0.53f,    1.0f, 1.0f, 1.0f,    1.0f, 1.0f,
+-0.5f, -0.5f, -0.3f, -0.848f, 0.0f, 0.53f,    1.0f, 1.0f, 1.0f,    1.0f, 1.0f,
++0.0f, +0.0f, +0.5f, -0.848f, 0.0f, 0.53f,    1.0f, 1.0f, 1.0f,    1.0f, 1.0f
 };
 
-std::vector<uint16_t> indexData = {
+std::vector<uint32_t> indexData = {
  0,  1,  2,
  0,  2,  3,
 
@@ -152,7 +153,8 @@ std::vector<uint16_t> indexData = {
 13, 14, 15
 };
 
-const uint32_t vertexCount = static_cast<uint32_t>(vertexData.size() / 9);
+const int VertexFloatComponentCount = 11;
+const uint32_t vertexCount = static_cast<uint32_t>(vertexData.size() / VertexFloatComponentCount);
 
 const uint32_t maxDrawCallsPerFrameSupported = 1024;
 
@@ -387,8 +389,8 @@ namespace
 
 Application::Application()
     : m_IsFullyInitialized(false)
-    , m_ScreenWidth(1024)
-    , m_ScreenHeight(768)
+    , m_ScreenWidth(1200)
+    , m_ScreenHeight(900)
     , m_Window(nullptr)
     , m_Instance(nullptr)
     , m_Surface(nullptr)
@@ -399,10 +401,6 @@ Application::Application()
     , m_BindGroup(nullptr)
     , m_Pipeline(nullptr)
     , m_ShaderModule(nullptr)
-    , m_VertexBufferSize(0)
-    , m_Buffer1(nullptr)
-    , m_IndexBufferSize(0)
-    , m_IndexBuffer(nullptr)
     , m_ConstantUniformBufferSize(0)
     , m_ConstantUniformBufferStride(0)
     , m_DynamicsUniformBufferSize(0)
@@ -494,25 +492,47 @@ bool Application::Initialize()
         return false;
     }
 
-    if (!CreateVertexBuffer())
+    uint32_t VertexBufferSize = 0;
+    WGPUBuffer Buffer1 = nullptr;
+    uint32_t IndexBufferSize = 0;
+    uint32_t IndicesCount = 0;
+    WGPUBuffer IndexBuffer = nullptr;
+
+    if (!CreateVertexBuffer(VertexBufferSize, Buffer1, vertexData))
     {
-        std::cerr << "Creating vertex buffer failed" << std::endl;
+        DestroyBuffer(Buffer1);
         return false;
     }
 
-    if (!CreateIndexBuffer())
+    if (!CreateIndexBuffer(IndexBufferSize, IndicesCount, IndexBuffer, indexData))
     {
-        std::cerr << "Creating index buffer failed" << std::endl;
+        DestroyBuffer(Buffer1);
+        DestroyBuffer(IndexBuffer);
         return false;
     }
 
-    //{ { Write input data } }
+    Pandu::Matrix44 Translate0 = Pandu::Matrix44::IDENTITY;
+    Translate0.SetTranslate(Pandu::Vector3(-0.5f, -0.5f, -2.25f));
 
-    //{ { Encode and submit the buffer to buffer copy } }
+    Pandu::Matrix44 Translate1 = Pandu::Matrix44::IDENTITY;
+    Translate1.SetTranslate(Pandu::Vector3(0.5f, 0.5f, -2.25f));
 
-    //{ { Read buffer data back } }
+    m_RenderObjects.push_back({ VertexBufferSize, Buffer1, IndexBufferSize, IndicesCount, IndexBuffer, Translate0});
+    m_RenderObjects.push_back({ VertexBufferSize, Buffer1, IndexBufferSize, IndicesCount, IndexBuffer, Translate1 });
 
-    //{ { Release buffers } }
+    ObjModelLoader Loader("./../Content/smooth_vase.obj");
+    std::future<std::unique_ptr<const ObjModelLoader::ModelData>> FutureModel = Loader.Load();
+    m_LoadingModels.push_back(std::move(FutureModel));
+
+    m_CameraMatrix = Pandu::Matrix44::IDENTITY;
+    //m_CameraMatrix.SetTranslate(Pandu::Vector3(0.0f, 40.0f, 800.5f));
+    m_CameraMatrix.SetTranslate(Pandu::Vector3(0.0f, 0.2f, 1.0f));
+
+    Pandu::Quaternion Quaty(Utils::Radians(160), Pandu::Vector3::UNIT_Y);
+    Pandu::Quaternion Quat(Utils::Radians(-160), Pandu::Vector3::UNIT_X);
+    Quat = Quaty * Quat;
+    m_ObjModelTransform = Pandu::Matrix44::IDENTITY;
+    Quat.ToRotationMatrix(m_ObjModelTransform);
 
 
     m_IsFullyInitialized = true;
@@ -524,8 +544,12 @@ void Application::Terminate()
 {
     m_IsFullyInitialized = false;
 
-    DestroyBuffer(m_Buffer1);
-    DestroyBuffer(m_IndexBuffer);
+    for (auto BuffData : m_RenderObjects)
+    {
+        DestroyBuffer(BuffData.VertexBuffer);
+        DestroyBuffer(BuffData.IndexBuffer);
+    }
+
     DestroyBuffer(m_UniformBuffer);
 
     if (m_ShaderModule)
@@ -665,11 +689,8 @@ void Application::MainLoop()
 
     if (!targetView) return;
 
-    Pandu::Matrix44 CameraTransform = Pandu::Matrix44::IDENTITY;
-    CameraTransform.SetTranslate(Pandu::Vector3(0.0f, 0.0f, 0.25f));
-
-    const Pandu::Matrix44 ProjectionMatrix = Utils::GetProjectionMatrix(Utils::Radians(60.0f), (float)m_ScreenWidth / (float)m_ScreenHeight, 0.01f, 100.0f);
-    const Pandu::Matrix44 ViewMatrix = CameraTransform.GetInverse();
+    const Pandu::Matrix44 ProjectionMatrix = Utils::GetProjectionMatrix(Utils::Radians(20.0f), (float)m_ScreenWidth / (float)m_ScreenHeight, 0.01f, 100.0f);
+    const Pandu::Matrix44 ViewMatrix = m_CameraMatrix.GetInverse();
     
 
 #ifndef WEBGPU_BACKEND_WGPU
@@ -732,23 +753,8 @@ void Application::MainLoop()
     LightDirection.Normalize();
 
     ConstantUniforms ConstData;
-    FillConstantUniform(ConstData, ProjectionMatrix, ViewMatrix, Pandu::Vector4(0.1f, 0.1f, 0.1f, 1.0f), LightDirection, Pandu::Vector4::UNIT, Time, DeltaTime);
+    FillConstantUniform(ConstData, ProjectionMatrix, ViewMatrix, Pandu::Vector4(0.05f, 0.05f, 0.05f, 1.0f), LightDirection, Pandu::Vector4::UNIT, Time, DeltaTime);
     wgpuQueueWriteBuffer(m_Queue, m_UniformBuffer, 0, &ConstData, sizeof(ConstantUniforms));
-
-    int ObjIndex = 0;
-    Pandu::Matrix44 Translate0 = Pandu::Matrix44::IDENTITY;
-    Translate0.SetTranslate(Pandu::Vector3(-0.5f, -0.5f, -2.25f));
-    DynamicUniforms DynData;
-    FillDynamicUniform(DynData, Translate0, Pandu::Vector4::UNIT);
-    wgpuQueueWriteBuffer(m_Queue, m_UniformBuffer, m_ConstantUniformBufferStride + m_DynamicsUniformBufferStride * ObjIndex, &DynData, sizeof(DynamicUniforms));
-
-    // for second object
-    Pandu::Matrix44 Translate1 = Pandu::Matrix44::IDENTITY;
-    Translate1.SetTranslate(Pandu::Vector3(0.5f, 0.5f, -2.25f));
-    ObjIndex++;
-    DynamicUniforms DynData1;
-    FillDynamicUniform(DynData1, Translate1, Pandu::Vector4::UNIT);
-    wgpuQueueWriteBuffer(m_Queue, m_UniformBuffer, m_ConstantUniformBufferStride + m_DynamicsUniformBufferStride * ObjIndex, &DynData1, sizeof(DynamicUniforms));
 
 
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(m_Device, &encoderDesc);
@@ -760,21 +766,8 @@ void Application::MainLoop()
     // Select which render pipeline to use
     wgpuRenderPassEncoderSetPipeline(renderPass, m_Pipeline);
 
-    // Set vertex buffer while encoding the render pass
-    wgpuRenderPassEncoderSetVertexBuffer(renderPass, 0, m_Buffer1, 0, m_VertexBufferSize);
-
-    wgpuRenderPassEncoderSetIndexBuffer(renderPass, m_IndexBuffer, WGPUIndexFormat_Uint16, 0, m_IndexBufferSize);
-
-    const uint32_t IndicesCount = (uint32_t)indexData.size();
-
-    // Set binding group
-    uint32_t dynamicOffset = 0 * m_DynamicsUniformBufferStride;
-    wgpuRenderPassEncoderSetBindGroup(renderPass, 0, m_BindGroup, 1, &dynamicOffset);
-    wgpuRenderPassEncoderDrawIndexed(renderPass, IndicesCount, 1, 0, 0, 0);
-
-    dynamicOffset = 1 * m_DynamicsUniformBufferStride;
-    wgpuRenderPassEncoderSetBindGroup(renderPass, 0, m_BindGroup, 1, &dynamicOffset);
-    wgpuRenderPassEncoderDrawIndexed(renderPass, IndicesCount, 1, 0, 0, 0);
+    uint32_t ObjectIndex = 0;
+    RenderRenderObject(ObjectIndex, renderPass);
  
     // [...] Use Render Pass
     wgpuRenderPassEncoderEnd(renderPass);
@@ -800,6 +793,8 @@ void Application::MainLoop()
 #ifdef WEBGPU_BACKEND_WGPU
     wgpuTextureRelease(surfaceTexture.texture);
 #endif
+
+    CheckLoadingObjects();
 }
 
 bool Application::IsRunning()
@@ -1389,20 +1384,24 @@ bool Application::CreatePipeline()
 
 
     // Vertex fetch
-    std::vector<WGPUVertexAttribute> vertexAttribs(3);
-    vertexAttribs[0].format = WGPUVertexFormat::WGPUVertexFormat_Float32x3;;
+    std::vector<WGPUVertexAttribute> vertexAttribs(4);
+    vertexAttribs[0].format = WGPUVertexFormat::WGPUVertexFormat_Float32x3;
     vertexAttribs[0].offset = 0;
     vertexAttribs[0].shaderLocation = 0;
 
-    vertexAttribs[1].format = WGPUVertexFormat::WGPUVertexFormat_Float32x3;;
+    vertexAttribs[1].format = WGPUVertexFormat::WGPUVertexFormat_Float32x3;
     vertexAttribs[1].offset = 3 * sizeof(float); // starts after x, y, z position
     vertexAttribs[1].shaderLocation = 1;
 
-    vertexAttribs[2].format = WGPUVertexFormat::WGPUVertexFormat_Float32x3;;
+    vertexAttribs[2].format = WGPUVertexFormat::WGPUVertexFormat_Float32x3;
     vertexAttribs[2].offset = 6 * sizeof(float); // starts after x, y, z position and x, y, z normal
     vertexAttribs[2].shaderLocation = 2;
 
-    const uint32_t StrideSize = 9 * sizeof(float);
+    vertexAttribs[3].format = WGPUVertexFormat::WGPUVertexFormat_Float32x2;
+    vertexAttribs[3].offset = 9 * sizeof(float); // starts after x, y, z position and x, y uv
+    vertexAttribs[3].shaderLocation = 3;
+
+    const uint32_t StrideSize = VertexFloatComponentCount * sizeof(float);
     m_VertexBufferLayout.arrayStride = StrideSize;
     m_VertexBufferLayout.stepMode = WGPUVertexStepMode::WGPUVertexStepMode_Vertex;
     m_VertexBufferLayout.attributeCount = static_cast<uint32_t>(vertexAttribs.size());
@@ -1419,7 +1418,7 @@ bool Application::CreatePipeline()
     primitive.topology = WGPUPrimitiveTopology::WGPUPrimitiveTopology_TriangleList;
     primitive.stripIndexFormat = WGPUIndexFormat::WGPUIndexFormat_Undefined;
     primitive.frontFace = WGPUFrontFace::WGPUFrontFace_CCW;
-    primitive.cullMode = WGPUCullMode_None;
+    primitive.cullMode = WGPUCullMode_Back;
 
     WGPUVertexState vertex{};
     vertex.nextInChain = nullptr;
@@ -1494,29 +1493,35 @@ bool Application::CreatePipeline()
     return m_Pipeline != nullptr;
 }
 
-bool Application::CreateVertexBuffer()
+bool Application::CreateVertexBuffer(uint32_t& OutBufferSize, WGPUBuffer& OutVertexBuffer, const std::vector<float>& VertexBufferData) const
 {
-    m_VertexBufferSize = (uint32_t)vertexData.size() * sizeof(float);
+    OutBufferSize = (uint32_t)VertexBufferData.size() * sizeof(float);
     //BufferSize = (BufferSize + 3) & ~3; //No need since buffer is already align by 4 bytes
 
     WGPUBufferDescriptor vertexBufferDesc{};
     vertexBufferDesc.nextInChain = nullptr;
-    vertexBufferDesc.size = m_VertexBufferSize;
+    vertexBufferDesc.size = OutBufferSize;
     vertexBufferDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_Vertex; // GPU-only
     vertexBufferDesc.mappedAtCreation = false;
 
-    m_Buffer1 = wgpuDeviceCreateBuffer(m_Device, &vertexBufferDesc);
+    OutVertexBuffer = wgpuDeviceCreateBuffer(m_Device, &vertexBufferDesc);
+    if (OutVertexBuffer == nullptr)
+        return false;
 
     WGPUBufferDescriptor stagingDesc{};
     stagingDesc.nextInChain = nullptr;
-    stagingDesc.size = m_VertexBufferSize;
+    stagingDesc.size = OutBufferSize;
     stagingDesc.usage = WGPUBufferUsage_MapWrite | WGPUBufferUsage_CopySrc; // CPU-writable + copy source
     stagingDesc.mappedAtCreation = true;
 
     WGPUBuffer stagingBuffer = wgpuDeviceCreateBuffer(m_Device, &stagingDesc);
+    if (stagingBuffer == nullptr)
+    {
+        return false;
+    }
 
     void* mapped = wgpuBufferGetMappedRange(stagingBuffer, 0, stagingDesc.size);
-    memcpy(mapped, vertexData.data(), stagingDesc.size);
+    memcpy(mapped, VertexBufferData.data(), stagingDesc.size);
     wgpuBufferUnmap(stagingBuffer);
 
     WGPUCommandEncoderDescriptor encoderDesc{};
@@ -1526,7 +1531,7 @@ bool Application::CreateVertexBuffer()
 
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(m_Device, &encoderDesc);
 
-    wgpuCommandEncoderCopyBufferToBuffer(encoder, stagingBuffer, 0, m_Buffer1, 0, stagingDesc.size);
+    wgpuCommandEncoderCopyBufferToBuffer(encoder, stagingBuffer, 0, OutVertexBuffer, 0, stagingDesc.size);
 
     WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(encoder, nullptr);
     wgpuQueueSubmit(m_Queue, 1, &cmd);
@@ -1543,29 +1548,35 @@ bool Application::CreateVertexBuffer()
     return true;
 }
 
-bool Application::CreateIndexBuffer()
+bool Application::CreateIndexBuffer(uint32_t& OutIndexBufferSize, uint32_t& OutIndicesCount, WGPUBuffer& OutIndexBuffer, const std::vector<uint32_t>& Indices) const
 {
-    m_IndexBufferSize = (uint32_t)indexData.size() * sizeof(uint16_t);
-    m_IndexBufferSize = (m_IndexBufferSize + 3) & ~3; //No need since buffer is already align by 4 bytes, since uint32_t is 4 bytes, if we use uint16_t or lower then we might have to uncomment this
+    OutIndicesCount = (uint32_t)Indices.size();
+
+    OutIndexBufferSize = OutIndicesCount * sizeof(uint32_t);
+    OutIndexBufferSize = (OutIndexBufferSize + 3) & ~3; //No need since buffer is already align by 4 bytes, since uint32_t is 4 bytes, if we use uint16_t or lower then we might have to uncomment this
 
     WGPUBufferDescriptor vertexBufferDesc{};
     vertexBufferDesc.nextInChain = nullptr;
-    vertexBufferDesc.size = m_IndexBufferSize;
+    vertexBufferDesc.size = OutIndexBufferSize;
     vertexBufferDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_Index; // GPU-only
     vertexBufferDesc.mappedAtCreation = false;
 
-    m_IndexBuffer = wgpuDeviceCreateBuffer(m_Device, &vertexBufferDesc);
+    OutIndexBuffer = wgpuDeviceCreateBuffer(m_Device, &vertexBufferDesc);
+    if (OutIndexBuffer == nullptr)
+        return false;
 
     WGPUBufferDescriptor stagingDesc{};
     stagingDesc.nextInChain = nullptr;
-    stagingDesc.size = m_IndexBufferSize;
+    stagingDesc.size = OutIndexBufferSize;
     stagingDesc.usage = WGPUBufferUsage_MapWrite | WGPUBufferUsage_CopySrc; // CPU-writable + copy source
     stagingDesc.mappedAtCreation = true;
 
     WGPUBuffer stagingBuffer = wgpuDeviceCreateBuffer(m_Device, &stagingDesc);
+    if (stagingBuffer == nullptr)
+        return false;
 
     void* mapped = wgpuBufferGetMappedRange(stagingBuffer, 0, stagingDesc.size);
-    memcpy(mapped, indexData.data(), stagingDesc.size);
+    memcpy(mapped, Indices.data(), stagingDesc.size);
     wgpuBufferUnmap(stagingBuffer);
 
     WGPUCommandEncoderDescriptor encoderDesc{};
@@ -1575,7 +1586,7 @@ bool Application::CreateIndexBuffer()
 
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(m_Device, &encoderDesc);
 
-    wgpuCommandEncoderCopyBufferToBuffer(encoder, stagingBuffer, 0, m_IndexBuffer, 0, stagingDesc.size);
+    wgpuCommandEncoderCopyBufferToBuffer(encoder, stagingBuffer, 0, OutIndexBuffer, 0, stagingDesc.size);
 
     WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(encoder, nullptr);
     wgpuQueueSubmit(m_Queue, 1, &cmd);
@@ -1642,4 +1653,100 @@ bool Application::CreateUniformBuffer()
     m_BindGroup = wgpuDeviceCreateBindGroup(m_Device, &bindGroupDesc);
 
     return true;
+}
+
+void Application::CheckLoadingObjects()
+{
+    for (auto itr = m_LoadingModels.begin(); itr != m_LoadingModels.end(); )
+    {
+        auto& futureModel = *itr;
+
+        if (futureModel.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+        {
+            auto modelPtr = futureModel.get(); // move out unique_ptr
+            if (modelPtr)
+            {
+                LoadRenderModel(modelPtr.get());
+            }
+
+            // erase returns the next iterator
+            itr = m_LoadingModels.erase(itr);
+        }
+        else
+        {
+            ++itr;
+        }
+    }
+}
+
+void Application::LoadRenderModel(const ObjModelLoader::ModelData* Data)
+{
+    if (Data == nullptr || Data->positions.size() < 3 || Data->indices.size() < 3)
+        return;
+
+    const int VertexCount = (int)Data->positions.size() / 3;
+
+    std::vector<float> Vertices;
+    Vertices.reserve(VertexCount * VertexFloatComponentCount);
+
+    const int NormalCount = (int)Data->normals.size() / 3;
+    const int UVCount = (int)Data->texcoords.size() / 2;
+    for (int i = 0; i < VertexCount; i++)
+    {
+        const Pandu::Vector3 Position(Data->positions[i * 3 + 0], Data->positions[i * 3 + 1], Data->positions[i * 3 + 2]);
+        const Pandu::Vector3 Normal = i * 3 >= NormalCount ? Pandu::Vector3::UNIT_Z : Pandu::Vector3(Data->normals[i * 3 + 0], Data->normals[i * 3 + 1], Data->normals[i * 3 + 2]);
+        const Pandu::Vector3 Color = Pandu::Vector3::UNIT;
+        const Pandu::Vector2 UV = i * 2 >= UVCount ? Pandu::Vector2::UNIT_X : Pandu::Vector2(Data->normals[i * 2 + 0], Data->normals[i * 2 + 1]);
+
+        Vertices.push_back(Position.x);     Vertices.push_back(Position.y);     Vertices.push_back(Position.z);
+        Vertices.push_back(Normal.x);       Vertices.push_back(Normal.y);       Vertices.push_back(Normal.z);
+        Vertices.push_back(Color.x);        Vertices.push_back(Color.y);        Vertices.push_back(Color.z);
+        Vertices.push_back(UV.x);           Vertices.push_back(UV.y);
+    }
+
+    uint32_t VertexBufferSize = 0;
+    WGPUBuffer NewVertexBuffer = nullptr;
+    uint32_t IndexBufferSize = 0;
+    uint32_t IndicesCount = 0;
+    WGPUBuffer NewIndexBuffer = nullptr;
+
+    if (!CreateVertexBuffer(VertexBufferSize, NewVertexBuffer, Vertices))
+    {
+        DestroyBuffer(NewVertexBuffer);
+
+        return;
+    }
+
+    if (!CreateIndexBuffer(IndexBufferSize, IndicesCount, NewIndexBuffer, Data->indices))
+    {
+        DestroyBuffer(NewVertexBuffer);
+        DestroyBuffer(NewIndexBuffer);
+
+        return;
+    }
+
+    m_RenderObjects.push_back({ VertexBufferSize , NewVertexBuffer, IndexBufferSize, IndicesCount, NewIndexBuffer, m_ObjModelTransform });
+}
+
+void Application::RenderRenderObject(uint32_t& InOutBufferOffsetIndex, WGPURenderPassEncoder renderPass)
+{
+    const int Count = (int)m_RenderObjects.size();
+    for (int i = 0; i < Count; i++)
+    {
+        const RenderBuffer& RenderBuff = m_RenderObjects[i];
+
+        wgpuRenderPassEncoderSetVertexBuffer(renderPass, 0, RenderBuff.VertexBuffer, 0, RenderBuff.VertexBufferSize);
+        wgpuRenderPassEncoderSetIndexBuffer(renderPass, RenderBuff.IndexBuffer, WGPUIndexFormat_Uint32, 0, RenderBuff.IndexBufferSize);
+
+        DynamicUniforms DynData;
+        FillDynamicUniform(DynData, RenderBuff.ObjectTransform, Pandu::Vector4::UNIT);
+        wgpuQueueWriteBuffer(m_Queue, m_UniformBuffer, m_ConstantUniformBufferStride + m_DynamicsUniformBufferStride * InOutBufferOffsetIndex, &DynData, sizeof(DynamicUniforms));
+
+          
+        const uint32_t dynamicOffset = InOutBufferOffsetIndex * m_DynamicsUniformBufferStride;
+        wgpuRenderPassEncoderSetBindGroup(renderPass, 0, m_BindGroup, 1, &dynamicOffset);
+        wgpuRenderPassEncoderDrawIndexed(renderPass, RenderBuff.IndicesCount, 1, 0, 0, 0);
+
+        InOutBufferOffsetIndex++;
+    }
 }
