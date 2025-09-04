@@ -520,7 +520,7 @@ bool Application::Initialize()
     m_RenderObjects.push_back({ VertexBufferSize, Buffer1, IndexBufferSize, IndicesCount, IndexBuffer, Translate0});
     m_RenderObjects.push_back({ VertexBufferSize, Buffer1, IndexBufferSize, IndicesCount, IndexBuffer, Translate1 });
 
-    ObjModelLoader Loader("./assets/smooth_vase.obj");
+    ObjModelLoader Loader("assets/smooth_vase.obj");
     std::future<std::unique_ptr<const ObjModelLoader::ModelData>> FutureModel = Loader.Load();
     m_LoadingModels.push_back(std::move(FutureModel));
 
